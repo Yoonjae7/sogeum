@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="theme-color" content="#f4eee4">
+  <meta name="description" content="A little world of Korea. Explore a 3D globe, wander miniature neighborhoods built from real map footprints, and watch the daylight change.">
+  <title>Sogeum · A little world of Korea</title>
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='20' fill='%232e5950'/%3E%3Ccircle cx='32' cy='32' r='20' fill='%23e8bd84'/%3E%3Cpath d='M15 24L29 15 34 28 46 29 49 39 34 49 28 34 16 35Z' fill='%237b9b75'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="/style.css">
+  <script type="importmap">{"imports":{"three":"/vendor/three.module.js","three/addons/controls/OrbitControls.js":"/vendor/OrbitControls.js"}}</script>
+</head>
+<body>
+  <div id="world" aria-label="Interactive 3D world. Drag to orbit and scroll to zoom."></div>
+  <div class="canvas-shade"></div><div id="map-labels"></div>
+  <header class="topbar">
+    <a href="/" class="brand" aria-label="Sogeum home"><span class="brand-icon">◒</span><span>sogeum<span class="brand-korean">소금</span></span></a>
+    <div class="brand-note">A LITTLE WORLD OF KOREA</div>
+    <div class="top-actions"><span class="live-top"><i></i> A world that lives with you</span><button id="sound-btn" class="icon-button" aria-label="Turn on ambient sound" title="Ambient sound"><span data-icon="sound"></span></button><button id="help-btn" class="icon-button" aria-label="How to explore" title="How to explore"><span data-icon="help"></span></button></div>
+  </header>
+  <main class="explorer">
+    <aside class="sidebar">
+      <div class="intro"><div class="eyebrow"><span class="tiny-star">✦</span> YOUR NEXT LITTLE ADVENTURE</div><h1>Korea, up close.</h1><p>A familiar place. A new perspective.</p></div>
+      <div class="location-heading"><span>Pick a place to wander</span><span>06</span></div>
+      <nav id="destinations" aria-label="Korean neighborhoods"></nav>
+      <button id="passport-btn" class="passport"><span class="passport-icon" data-icon="passport"></span><span><strong>Your little journey</strong><small id="stamp-status">Find a star in every neighborhood</small></span><span id="stamp-count">0/6</span></button>
+    </aside>
+    <div class="view-tabs" role="group" aria-label="View"><button id="globe-btn" class="active"><span data-icon="globe"></span>Globe</button><button id="city-btn"><span data-icon="buildings"></span>Neighborhood</button></div>
+    <div class="world-caption"><span class="eyebrow" id="scene-eyebrow">OUR LITTLE BLUE PLANET</span><h2 id="scene-title">A world of possibilities.</h2><p id="scene-description">Drag to wander. Pick a place to get closer.</p></div>
+    <div class="scene-badge" id="scene-badge"><span class="live-dot"></span><span id="light-label">Following the sun</span></div>
+    <div class="camera-tools"><button id="zoom-in" class="icon-button" aria-label="Zoom in" title="Zoom in">+</button><button id="zoom-out" class="icon-button" aria-label="Zoom out" title="Zoom out">−</button><span></span><button id="reset-view" class="icon-button" aria-label="Reset camera" title="Reset camera"><span data-icon="compass"></span></button><button id="rotate-btn" class="icon-button" aria-label="Start auto rotation" title="Auto rotate"><span data-icon="rotate"></span></button></div>
+    <div class="coordinates"><span id="coordinate-text">37.5665° N &nbsp; 126.9780° E</span><span id="map-scale">EARTH · 1 : A LITTLE WONDER</span></div>
+    <button id="collect-star" class="collect-star" hidden aria-label="Collect this neighborhood's star" title="You found a little star!">✦</button>
+    <div class="time-panel">
+      <div class="time-top"><div class="time-caption"><span id="time-icon" data-icon="moon"></span><span><strong id="time-heading">Korea, right now</strong><small id="date-label">SEOUL · KST (UTC+9)</small></span></div><div class="clock-wrap"><time id="local-time">00:00</time><span class="live-pill active"><i></i> Live</span></div></div>
+      <div class="solar-track" aria-hidden="true"><span class="solar-night">☾</span><i id="sun-marker">☀</i><span class="solar-day">☀</span></div>
+      <div class="timeline-labels"><span>Midnight</span><span>Dawn</span><span>Noon</span><span>Sunset</span><span>Midnight</span></div>
+      <div class="time-note"><span id="time-mood">A quiet moment on the other side of the world.</span><span>Live Korea time · updates automatically</span></div>
+    </div>
+  </main>
+  <footer><span>Made for the joy of wandering.</span><button id="credits-btn">Map credits &amp; about</button><a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noreferrer">© OpenStreetMap contributors</a><span class="drag-hint"><span data-icon="mouse"></span>Drag to orbit <b>·</b> Scroll to zoom</span></footer>
+  <div id="toast" role="status" aria-live="polite"></div>
+  <div id="loading"><span class="loading-globe">◒</span><strong>A little world is waking up…</strong></div>
+  <dialog id="info-dialog"><button class="dialog-close icon-button" aria-label="Close dialog">×</button><div id="dialog-content"></div></dialog>
+  <script type="module" src="/main.js"></script>
+</body>
+</html>
