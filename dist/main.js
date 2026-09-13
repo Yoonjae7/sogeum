@@ -1,81 +1,242 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { SCALE, project, polygon, flatGeometry, stripGeometry, combine, inside, segmentDistance, sunDirection } from './geo.js';
+import { waterMaterial } from './water.js?v=9';
 
-const $=s=>document.querySelector(s);
-const renderer=new THREE.WebGLRenderer({antialias:true,alpha:false,powerPreference:'high-performance'});
-renderer.setPixelRatio(Math.min(devicePixelRatio,2));renderer.setSize(innerWidth,innerHeight);renderer.setClearColor(0xc9dad6);renderer.outputColorSpace=THREE.SRGBColorSpace;renderer.toneMapping=THREE.ACESFilmicToneMapping;renderer.toneMappingExposure=1.12;renderer.shadowMap.enabled=true;renderer.shadowMap.type=THREE.PCFSoftShadowMap;$('#scene').appendChild(renderer.domElement);
-const scene=new THREE.Scene();scene.fog=new THREE.FogExp2(0xc9dad6,.023);
-const camera=new THREE.PerspectiveCamera(38,innerWidth/innerHeight,.1,120);
-const controls=new OrbitControls(camera,renderer.domElement);controls.enableDamping=true;controls.dampingFactor=.06;controls.enablePan=false;controls.rotateSpeed=.48;controls.zoomSpeed=.65;controls.maxPolarAngle=1.28;
-const hemi=new THREE.HemisphereLight(0xfff3d9,0x355c57,.85);scene.add(hemi);
-const sun=new THREE.DirectionalLight(0xffe5b1,3.8);sun.castShadow=true;sun.shadow.mapSize.set(2048,2048);sun.shadow.camera.left=-9;sun.shadow.camera.right=9;sun.shadow.camera.top=9;sun.shadow.camera.bottom=-9;sun.shadow.camera.near=.1;sun.shadow.camera.far=45;sun.shadow.bias=-.0003;sun.shadow.normalBias=.025;scene.add(sun);
-const fill=new THREE.DirectionalLight(0xa9cfca,.2);fill.position.set(-5,4,-6);scene.add(fill);
-const koreaGroup=new THREE.Group(),detailGroup=new THREE.Group();scene.add(koreaGroup,detailGroup);detailGroup.visible=false;
-let mode='korea',transition=null,minute=0,daylight=.5,detailBuilt=false,zoomLock=false;
-const meshes=[],materials=[],geometries=[];const keepGeo=g=>(geometries.push(g),g),keepMat=m=>(materials.push(m),m);
+const $=s=>document.querySelector(s), reduced=matchMedia('(prefers-reduced-motion: reduce)').matches;
+const clamp=THREE.MathUtils.clamp;
+let renderer;
+try { renderer=new THREE.WebGLRenderer({antialias:true,powerPreference:'high-performance'}); }
+catch(error){$('#loading').hidden=true;$('#error').hidden=false;throw error;}
+renderer.setPixelRatio(Math.min(devicePixelRatio,1.75));renderer.setSize(innerWidth,innerHeight);
+renderer.outputColorSpace=THREE.SRGBColorSpace;renderer.toneMapping=THREE.ACESFilmicToneMapping;renderer.toneMappingExposure=1.15;
+renderer.shadowMap.enabled=true;renderer.shadowMap.type=THREE.PCFSoftShadowMap;$('#scene').append(renderer.domElement);
+const scene=new THREE.Scene();scene.background=new THREE.Color(0xe4edf0);scene.fog=new THREE.Fog(0xe4edf0,24,55);
+const camera=new THREE.PerspectiveCamera(37,innerWidth/innerHeight,.025,100);
+const controls=new OrbitControls(camera,renderer.domElement);
+controls.enableDamping=true;controls.dampingFactor=.075;controls.rotateSpeed=.45;controls.zoomSpeed=.72;controls.panSpeed=.55;
+controls.minDistance=1.2;controls.maxDistance=25;controls.minPolarAngle=.12;controls.maxPolarAngle=1.23;controls.screenSpacePanning=false;
+const skyLight=new THREE.HemisphereLight(0xe5f2ff,0xb0baa2,2.1);scene.add(skyLight);
+const sun=new THREE.DirectionalLight(0xfff3dc,3.2);sun.castShadow=true;sun.shadow.mapSize.set(4096,4096);
+Object.assign(sun.shadow.camera,{left:-9,right:9,top:9,bottom:-9,near:.1,far:50});sun.shadow.bias=-.00008;sun.shadow.normalBias=.003;sun.shadow.radius=2;scene.add(sun,sun.target);
+const bounce=new THREE.DirectionalLight(0xd8eaff,.4);bounce.position.set(5,8,-5);scene.add(bounce);
+const envScene=new THREE.Scene();envScene.background=new THREE.Color(0xd3e2ed);
+const pmrem=new THREE.PMREMGenerator(renderer);scene.environment=pmrem.fromScene(envScene).texture;scene.environmentIntensity=.25;pmrem.dispose();
+const detail=new THREE.Group(),country=new THREE.Group();scene.add(detail,country);country.visible=false;
+const riverMat=waterMaterial(),seaMat=waterMaterial(true),waterMaterials=[riverMat,seaMat];
+const mat=(color,extra={})=>new THREE.MeshStandardMaterial({color,roughness:.85,...extra});
+const m={ground:mat(0xd2d5ce),base:mat(0xa7b5af),curb:mat(0xd6d7d0),road:mat(0x646e70),path:mat(0xdacdb1),cycle:mat(0xb58373),lane:mat(0xe9e4cd),rail:mat(0x5b6462),railBed:mat(0xb4b4a4),grass:mat(0x8dac72),park:mat(0x6f985a),wood:mat(0x568352),bank:mat(0x97b77b),sand:mat(0xc3c0a4),court:mat(0x749d85),asphalt:mat(0x89958e),concrete:mat(0xd0d4cd),trunk:mat(0x746e52),tree:mat(0x6b965b),roof:mat(0xd0d4d0),roofDark:mat(0x919f9a)};
+const batches=new Map();
+function batch(geometry,material,parent=detail){const key=material.uuid+parent.uuid;if(!batches.has(key))batches.set(key,{geometries:[],material,parent});batches.get(key).geometries.push(geometry);}
+function mesh(geometry,material,parent=detail,cast=true){const obj=new THREE.Mesh(geometry,material);obj.castShadow=cast;obj.receiveShadow=true;parent.add(obj);return obj;}
+function flush(){for(const b of batches.values()){if(b.geometries.length)mesh(combine(b.geometries),b.material,b.parent);}batches.clear();}
+function plane(points,material,y=.004){batch(flatGeometry(points,y),material);}
+let seed=9247;function random(){seed=(seed*16807)%2147483647;return(seed-1)/2147483646;}
+const dummy=new THREE.Object3D();
+let mode='detail',animation=null,autoTour=false,labels=[],riverLine=[],features=[],traffic=[],trafficBody,trafficRoof,trainBody,trainPath;
+const nightLights=new THREE.Group();detail.add(nightLights);
+let riverPolygons=[],parkPolygons=[],buildingPolygons=[],roadPaths=[];
+const localBounds=[project([126.858,37.492]),project([126.892,37.469])];
+const within=p=>p.x>localBounds[0].x&&p.x<localBounds[1].x&&p.y>localBounds[0].y&&p.y<localBounds[1].y;
+function riverX(z){for(let i=1;i<riverLine.length;i++){const a=riverLine[i-1],b=riverLine[i];if(z>=Math.min(a.y,b.y)&&z<=Math.max(a.y,b.y)){return a.x+(b.x-a.x)*(z-a.y)/(b.y-a.y);}}return riverLine.length?riverLine.reduce((a,b)=>Math.abs(b.y-z)<Math.abs(a.y-z)?b:a).x:0;}
+const riverDistance=p=>Math.abs(p.x-riverX(p.y));
+function roadHeight(p,road){const inRiver=riverDistance(p)<.48;const major=['primary','secondary','tertiary'].includes(road.tags.highway);return .023+(major&&inRiver?.055*Math.max(0,1-Math.pow(riverDistance(p)/.48,4)):0)+(road.tags.bridge==='yes'?.009:0);}
 
-const seaUniforms={uTime:{value:0},uDay:{value:.5},uSunX:{value:.5}};
-const seaMat=keepMat(new THREE.ShaderMaterial({uniforms:seaUniforms,side:THREE.DoubleSide,vertexShader:`
-uniform float uTime;varying vec2 vUv;varying float vWave;
-void main(){vUv=uv;vec3 p=position;float w=sin(p.x*.55+uTime*.35)*.10+cos(p.y*.7-uTime*.28)*.07+sin((p.x+p.y)*1.2+uTime*.22)*.025;p.z+=w;vWave=w;gl_Position=projectionMatrix*modelViewMatrix*vec4(p,1.0);}`,
-fragmentShader:`uniform float uTime;uniform float uDay;uniform float uSunX;varying vec2 vUv;varying float vWave;
-void main(){vec3 deep=mix(vec3(.13,.34,.36),vec3(.24,.52,.53),uDay);vec3 pale=mix(vec3(.25,.45,.45),vec3(.48,.70,.66),uDay);float bands=.5+.5*sin(vUv.y*310.+vUv.x*80.+uTime*.55);float glint=pow(max(0.,1.-distance(vUv,vec2(uSunX,.52))*3.1),7.)*uDay;vec3 c=mix(deep,pale,.42+vWave*1.4)+bands*.018+glint*vec3(1.,.72,.35);gl_FragColor=vec4(c,1.);}`}));
-const sea=new THREE.Mesh(keepGeo(new THREE.PlaneGeometry(52,52,130,130)),seaMat);sea.rotation.x=-Math.PI/2;sea.position.y=-.34;sea.receiveShadow=true;scene.add(sea);
+function facadeTexture(glass=false,warm=false){
+ const canvas=document.createElement('canvas');canvas.width=128;canvas.height=128;const c=canvas.getContext('2d');
+ c.fillStyle=glass?'#617f89':warm?'#e8e5dc':'#e6eae7';c.fillRect(0,0,128,128);
+ if(glass){c.fillStyle='#a5bfc6';c.fillRect(6,4,52,116);c.fillStyle='#7c9eac';c.fillRect(65,4,57,116);c.fillStyle='#bfd0d1';c.fillRect(0,120,128,8);c.fillStyle='#d0d6d2';c.fillRect(60,0,4,128);}
+ else{c.fillStyle='#bac6c5';c.fillRect(17,20,39,78);c.fillRect(72,20,39,78);c.fillStyle='#526d75';c.fillRect(20,23,33,69);c.fillRect(75,23,33,69);c.fillStyle='#8da9af';c.fillRect(23,26,28,30);c.fillRect(78,26,28,30);c.fillStyle='#d6ddda';c.fillRect(35,23,3,69);c.fillRect(90,23,3,69);c.fillStyle='#b4bcb5';c.fillRect(15,99,42,3);c.fillRect(70,99,42,3);}
+ const texture=new THREE.CanvasTexture(canvas);texture.colorSpace=THREE.SRGBColorSpace;texture.wrapS=texture.wrapT=THREE.RepeatWrapping;texture.anisotropy=renderer.capabilities.getMaxAnisotropy();return texture;
+}
+const facadeMats=[mat(0xffffff,{map:facadeTexture(),roughness:.78}),mat(0xeeeae0,{map:facadeTexture(false,true),roughness:.8}),mat(0xf4f9fb,{map:facadeTexture(true),roughness:.29,metalness:.18}),mat(0xc0d4d8,{map:facadeTexture(true),roughness:.32,metalness:.15}),mat(0xd2bdb0,{map:facadeTexture(false,true)}),mat(0xe4ebdf,{map:facadeTexture()})];
+function windowLights(glass){const canvas=document.createElement('canvas');canvas.width=canvas.height=512;const c=canvas.getContext('2d');c.fillStyle='#000';c.fillRect(0,0,512,512);for(let row=0;row<4;row++)for(let col=0;col<4;col++)for(let side=0;side<2;side++){if(random()>.48)continue;c.fillStyle=['#dfb46b','#afc3c2','#ecce8c'][Math.floor(random()*3)];c.fillRect(col*128+(glass?(side?65:6):(side?75:20)),row*128+(glass?4:23),glass?52:33,glass?116:69);}const texture=new THREE.CanvasTexture(canvas);texture.colorSpace=THREE.SRGBColorSpace;texture.wrapS=texture.wrapT=THREE.RepeatWrapping;texture.repeat.set(.25,.25);texture.anisotropy=renderer.capabilities.getMaxAnisotropy();return texture;}
+facadeMats.forEach((material,i)=>{material.emissive=new THREE.Color(0xffdda8);material.emissiveMap=windowLights(i===2||i===3);material.emissiveIntensity=0;});
+const roofMats=[m.roof,m.roofDark,mat(0x8faaa1),mat(0xc2c7bc),mat(0xc3b6ac)];
+function sliceGeometry(g,start,count){const out=new THREE.BufferGeometry();for(const name of ['position','normal','uv']){const a=g.getAttribute(name);out.setAttribute(name,new THREE.BufferAttribute(a.array.slice(start*a.itemSize,(start+count)*a.itemSize),a.itemSize));}return out;}
+function buildBuilding(f,index){
+ const p=f.points,t=f.tags; if(p.length<3)return;
+ const c=p.reduce((s,p)=>s.add(p),new THREE.Vector2()).multiplyScalar(1/p.length);
+ const box=new THREE.Box2().setFromPoints(p),size=box.getSize(new THREE.Vector2());if(size.x<.004||size.y<.004)return;
+ const office=['office','commercial','retail'].includes(t.building)||t.office||(/타워|센터|밸리|플라츠|테크노|디폴리스/.test(t.name||''));
+ const apartment=t.building==='apartments';
+ const taggedHeight=parseFloat(t.height),levels=parseFloat(t['building:levels']);
+ const height=Number.isFinite(taggedHeight)?taggedHeight:Number.isFinite(levels)?levels*3.1:apartment?45:office?32:t.building==='industrial'?14:t.building==='garage'?3.5:9;
+ const h=clamp(height,3,200)*SCALE;
+ const geometry=new THREE.ExtrudeGeometry(polygon(p),{depth:h,bevelEnabled:false,steps:1,UVGenerator:{
+  generateTopUV:(g,v,a,b,c)=>[a,b,c].map(i=>new THREE.Vector2(v[i*3],v[i*3+1])),
+  generateSideWallUV:(g,v,a,b,c,d)=>{const len=Math.hypot(v[a*3]-v[b*3],v[a*3+1]-v[b*3+1]);return [new THREE.Vector2(0,v[a*3+2]/(.0124)),new THREE.Vector2(len/(office?.017:.022),v[b*3+2]/.0124),new THREE.Vector2(len/(office?.017:.022),v[c*3+2]/.0124),new THREE.Vector2(0,v[d*3+2]/.0124)];}
+ }});
+ geometry.rotateX(-Math.PI/2);geometry.translate(0,.027,0);
+ const facade=facadeMats[office?(index%3?2:3):apartment?index%2:[0,1,4,5][index%4]],roof=roofMats[index%roofMats.length];
+ for(const group of geometry.groups)batch(sliceGeometry(geometry,group.start,group.count),group.materialIndex===0?roof:facade);geometry.dispose();
+ buildingPolygons.push({points:p,box});
+ if(height>20&&size.x>.045&&size.y>.045){
+  batch(stripGeometry([...p,p[0]],.0028,.029+h),m.concrete);
+  if(inside(c,p)){const w=Math.min(.025,size.x*.17),d=Math.min(.024,size.y*.17);batch(new THREE.BoxGeometry(w,.009,d).translate(c.x,.032+h,c.y),m.roofDark);}
+ }
+}
+function treeGeometry(){const parts=[];for(const [x,y,z,r]of [[0,.026,0,.016],[-.007,.022,0,.013],[.007,.022,.004,.013],[0,.034,-.003,.011]])parts.push(new THREE.IcosahedronGeometry(r,1).translate(x,y,z));return combine(parts);}
+function placeTrees(points){
+ const foliage=new THREE.InstancedMesh(treeGeometry(),m.tree,points.length),trunks=new THREE.InstancedMesh(new THREE.CylinderGeometry(.0018,.0025,.025,5).translate(0,.012,0),m.trunk,points.length);
+ foliage.castShadow=true;foliage.receiveShadow=true;trunks.castShadow=true;
+ points.forEach((p,i)=>{dummy.position.set(p.x,p.h||.016,p.y);dummy.rotation.set(0,random()*Math.PI,0);const scale=.8+random()*.85;dummy.scale.set(scale,scale*(.85+random()*.3),scale);dummy.updateMatrix();foliage.setMatrixAt(i,dummy.matrix);trunks.setMatrixAt(i,dummy.matrix);foliage.setColorAt(i,new THREE.Color().setHSL(.25+random()*.07,.23+random()*.18,.29+random()*.12));});
+ detail.add(foliage,trunks);dummy.scale.set(1,1,1);
+}
+function inBuilding(p){return buildingPolygons.some(b=>b.box.containsPoint(p)&&inside(p,b.points));}
+function nearRoad(p){return roadPaths.some(r=>r.box.containsPoint(p)&&r.points.some((a,i)=>i&&segmentDistance(p,r.points[i-1],a)<r.width*.65));}
+function getPath(points){let length=0;const distances=[0];for(let i=1;i<points.length;i++){length+=points[i].distanceTo(points[i-1]);distances.push(length);}return{points,distances,length};}
+function placeStreetlights(){const positions=[];for(const road of roadPaths.filter(r=>r.width>=.03)){const path=getPath(road.points);for(let d=.06;d<path.length;d+=.19){const{point:p,angle}=atPath(path,d);p.x+=Math.cos(angle)*(road.width/2+.007);p.y-=Math.sin(angle)*(road.width/2+.007);if(within(p)&&!inBuilding(p))positions.push(p);}}
+ const canvas=document.createElement('canvas');canvas.width=canvas.height=64;const ctx=canvas.getContext('2d'),gradient=ctx.createRadialGradient(32,32,0,32,32,32);gradient.addColorStop(0,'rgba(255,220,151,.65)');gradient.addColorStop(.24,'rgba(255,204,112,.25)');gradient.addColorStop(1,'rgba(255,190,90,0)');ctx.fillStyle=gradient;ctx.fillRect(0,0,64,64);const texture=new THREE.CanvasTexture(canvas);
+ const halos=new THREE.InstancedMesh(new THREE.PlaneGeometry(.085,.085).rotateX(-Math.PI/2),new THREE.MeshBasicMaterial({map:texture,transparent:true,depthWrite:false,toneMapped:false}),positions.length);
+ const bulbs=new THREE.InstancedMesh(new THREE.SphereGeometry(.0025,6,5),new THREE.MeshBasicMaterial({color:0xffd59a,toneMapped:false}),positions.length);
+ const poles=new THREE.InstancedMesh(new THREE.CylinderGeometry(.0008,.001,.023,5),m.rail,positions.length);
+ positions.forEach((p,i)=>{dummy.rotation.set(0,0,0);dummy.scale.set(1,1,1);dummy.position.set(p.x,.030,p.y);dummy.updateMatrix();halos.setMatrixAt(i,dummy.matrix);dummy.position.y=.05;dummy.updateMatrix();bulbs.setMatrixAt(i,dummy.matrix);dummy.position.y=.037;dummy.updateMatrix();poles.setMatrixAt(i,dummy.matrix);});
+ nightLights.add(halos,bulbs);detail.add(poles);
+}
+function atPath(path,d){d=((d%path.length)+path.length)%path.length;for(let i=1;i<path.distances.length;i++)if(path.distances[i]>=d){const a=path.points[i-1],b=path.points[i],t=(d-path.distances[i-1])/(path.distances[i]-path.distances[i-1]);return{point:a.clone().lerp(b,t),angle:Math.atan2(b.x-a.x,b.y-a.y)};}return{point:path.points[0],angle:0};}
 
-const koreaCenter={lon:127.72,lat:36.08},KS=1.82;
-const koreaPoint=([lon,lat])=>new THREE.Vector2((lon-koreaCenter.lon)*Math.cos(36*Math.PI/180)*KS,-(lat-koreaCenter.lat)*KS);
-function shapeFrom(points){const shape=new THREE.Shape();points.forEach((p,i)=>i?shape.lineTo(p.x,-p.y):shape.moveTo(p.x,-p.y));shape.closePath();return shape;}
-function makeMesh(geometry,material,parent=koreaGroup){const m=new THREE.Mesh(keepGeo(geometry),material);m.castShadow=true;m.receiveShadow=true;parent.add(m);meshes.push(m);return m;}
-const mats={land:keepMat(new THREE.MeshStandardMaterial({color:0xa9bc8b,roughness:.9})),edge:keepMat(new THREE.MeshStandardMaterial({color:0xd7c08d,roughness:1})),mountain:keepMat(new THREE.MeshStandardMaterial({color:0x799a71,roughness:.96})),stone:keepMat(new THREE.MeshStandardMaterial({color:0xd8d2bc,roughness:.95})),gold:keepMat(new THREE.MeshStandardMaterial({color:0xffd078,emissive:0xa05a12,emissiveIntensity:.25}))};
-const world=await fetch('/data/world.geojson').then(r=>r.json());const kor=world.features.find(f=>f.properties.isoA3==='KOR');const ring=kor.geometry.coordinates[0].map(koreaPoint);const koreaShape=shapeFrom(ring);
-const countryBase=makeMesh(new THREE.ExtrudeGeometry(koreaShape,{depth:.26,bevelEnabled:true,bevelSize:.055,bevelThickness:.055,bevelSegments:2}),mats.edge);countryBase.rotation.x=-Math.PI/2;countryBase.position.y=-.06;
-const countryTop=makeMesh(new THREE.ExtrudeGeometry(koreaShape,{depth:.18,bevelEnabled:true,bevelSize:.025,bevelThickness:.025,bevelSegments:2}),mats.land);countryTop.rotation.x=-Math.PI/2;countryTop.position.y=.08;
-const jejuPos=koreaPoint([126.53,33.49]);const jeju=makeMesh(new THREE.CylinderGeometry(.36,.4,.18,16),mats.land);jeju.position.set(jejuPos.x,.1,jejuPos.y);jeju.scale.z=.5;jeju.rotation.y=-.3;
-const mountainPlaces=[[128.18,38.05,.25],[128.48,37.6,.32],[128.2,37.25,.25],[127.65,36.92,.28],[128.1,36.35,.33],[127.48,35.82,.28],[127.72,35.28,.25],[126.72,35.12,.18],[129.0,35.72,.22],[126.9,37.35,.16]];
-mountainPlaces.forEach(([lon,lat,s],i)=>{const p=koreaPoint([lon,lat]);const m=makeMesh(new THREE.ConeGeometry(s,s*(1.3+(i%3)*.25),7),mats.mountain);m.position.set(p.x,.24+s*.55,p.y);m.rotation.y=i*.9;});
-const cityMat=keepMat(new THREE.MeshStandardMaterial({color:0xe4d8b7,roughness:.85}));[[126.978,37.566,.12],[129.076,35.18,.105],[128.601,35.87,.09],[126.705,37.456,.07],[126.852,35.16,.07]].forEach(([lon,lat,s])=>{const p=koreaPoint([lon,lat]);for(let i=0;i<5;i++){const h=.12+(i%3)*.055,m=makeMesh(new THREE.BoxGeometry(s*.65,h,s*.65),cityMat);m.position.set(p.x+(i%2)*s*.68,.25+h/2,p.y+(Math.floor(i/2)-1)*s*.7);}});
-const cheolKorea=koreaPoint([126.8683,37.476]);const pinStem=makeMesh(new THREE.CylinderGeometry(.025,.025,.36,10),mats.gold);pinStem.position.set(cheolKorea.x,.52,cheolKorea.y);const pinHead=makeMesh(new THREE.SphereGeometry(.11,18,12),mats.gold);pinHead.position.set(cheolKorea.x,.76,cheolKorea.y);
-const koreaLabels=[{name:'철산',sub:'CHEOLSAN',pos:new THREE.Vector3(cheolKorea.x,.9,cheolKorea.y),kind:'main'},{name:'서울',sub:'SEOUL',pos:(()=>{const p=koreaPoint([126.978,37.566]);return new THREE.Vector3(p.x,.45,p.y)})()},{name:'부산',sub:'BUSAN',pos:(()=>{const p=koreaPoint([129.076,35.18]);return new THREE.Vector3(p.x,.4,p.y)})()},{name:'제주',sub:'JEJU',pos:new THREE.Vector3(jejuPos.x,.38,jejuPos.y)}];
-
-function roundedShape(w,h,r){const s=new THREE.Shape();s.moveTo(-w/2+r,-h/2);s.lineTo(w/2-r,-h/2);s.quadraticCurveTo(w/2,-h/2,w/2,-h/2+r);s.lineTo(w/2,h/2-r);s.quadraticCurveTo(w/2,h/2,w/2-r,h/2);s.lineTo(-w/2+r,h/2);s.quadraticCurveTo(-w/2,h/2,-w/2,h/2-r);s.lineTo(-w/2,-h/2+r);s.quadraticCurveTo(-w/2,-h/2,-w/2+r,-h/2);return s;}
-const corridorCenter={lon:126.8754,lat:37.4785},DS=.0035;
-const local=([lon,lat])=>new THREE.Vector2((lon-corridorCenter.lon)*111320*Math.cos(corridorCenter.lat*Math.PI/180)*DS,-(lat-corridorCenter.lat)*111320*DS);
-function surface(points,material,y=.12,parent=detailGroup){const s=shapeFrom(points),m=makeMesh(new THREE.ShapeGeometry(s),material,parent);m.rotation.x=-Math.PI/2;m.position.y=y;return m;}
-function ribbon(points,width,material,y=.14,parent=detailGroup){const verts=[],idx=[];for(let i=0;i<points.length;i++){const a=points[Math.max(0,i-1)],b=points[Math.min(points.length-1,i+1)],d=b.clone().sub(a).normalize(),n=new THREE.Vector2(-d.y,d.x).multiplyScalar(width/2);verts.push(points[i].x+n.x,y,points[i].y+n.y,points[i].x-n.x,y,points[i].y-n.y);if(i<points.length-1){const k=i*2;idx.push(k,k+1,k+2,k+1,k+3,k+2);}}const g=new THREE.BufferGeometry();g.setAttribute('position',new THREE.Float32BufferAttribute(verts,3));g.setIndex(idx);g.computeVertexNormals();return makeMesh(g,material,parent);}
-const detailMaterials={base:keepMat(new THREE.MeshStandardMaterial({color:0xb99f78,roughness:1})),west:keepMat(new THREE.MeshStandardMaterial({color:0xd9cfb4,roughness:.97})),east:keepMat(new THREE.MeshStandardMaterial({color:0xc9d0c8,roughness:.95})),park:keepMat(new THREE.MeshStandardMaterial({color:0x759b69,roughness:1})),park2:keepMat(new THREE.MeshStandardMaterial({color:0x90ad78,roughness:1})),bank:keepMat(new THREE.MeshStandardMaterial({color:0x86aa79,roughness:1})),river:keepMat(new THREE.MeshPhysicalMaterial({color:0x58bec8,roughness:.1,metalness:.12,clearcoat:1,clearcoatRoughness:.1,emissive:0x14545b,emissiveIntensity:.28})),road:keepMat(new THREE.MeshStandardMaterial({color:0x747e7d,roughness:.92})),roadLight:keepMat(new THREE.MeshStandardMaterial({color:0xa4aaa3,roughness:.95})),line:keepMat(new THREE.MeshStandardMaterial({color:0xeee5c7,roughness:.8})),tree:keepMat(new THREE.MeshStandardMaterial({color:0x608860,roughness:1})),tree2:keepMat(new THREE.MeshStandardMaterial({color:0x86a66e,roughness:1})),trunk:keepMat(new THREE.MeshStandardMaterial({color:0x856b4a,roughness:1}))};
-let detailLabels=[];
-async function buildDetail(){if(detailBuilt)return;detailBuilt=true;const [west,east]=await Promise.all([fetch('/data/cheolsan.json').then(r=>r.json()),fetch('/data/gasan.json').then(r=>r.json())]);
- const tile=makeMesh(new THREE.ExtrudeGeometry(roundedShape(10.2,7.1,.38),{depth:.28,bevelEnabled:true,bevelSize:.08,bevelThickness:.05,bevelSegments:3}),detailMaterials.base,detailGroup);tile.rotation.x=-Math.PI/2;tile.position.y=-.18;
- surface([new THREE.Vector2(-5,-3.5),new THREE.Vector2(.05,-3.5),new THREE.Vector2(.05,3.5),new THREE.Vector2(-5,3.5)],detailMaterials.west,.11);
- surface([new THREE.Vector2(.05,-3.5),new THREE.Vector2(5,-3.5),new THREE.Vector2(5,3.5),new THREE.Vector2(.05,3.5)],detailMaterials.east,.112);
- surface([new THREE.Vector2(-5,-3.5),new THREE.Vector2(-.15,-3.5),new THREE.Vector2(-.65,-1.0),new THREE.Vector2(-2.2,-.45),new THREE.Vector2(-3.0,.2),new THREE.Vector2(-5,.7)],detailMaterials.park,.125);
- surface([new THREE.Vector2(-5,-3.5),new THREE.Vector2(-1.3,-3.5),new THREE.Vector2(-1.65,-1.45),new THREE.Vector2(-3.3,-.8),new THREE.Vector2(-5,-.55)],detailMaterials.park2,.132);
- const riverGeo=[[126.87555,37.4872],[126.87578,37.4845],[126.87603,37.4816],[126.87648,37.4788],[126.87715,37.4761],[126.87815,37.4732],[126.87925,37.4698]].map(local);
- ribbon(riverGeo,.82,detailMaterials.bank,.145);ribbon(riverGeo,.48,detailMaterials.river,.166);
- const combinedBuildings=[...west.buildings,...east.buildings],combinedRoads=[...west.roads,...east.roads],seenB=new Set(),seenR=new Set();
- const roadSegments=[];combinedRoads.forEach(r=>{if(seenR.has(r.osmId))return;seenR.add(r.osmId);const pts=r.points.map(local);const major=['primary','secondary','tertiary'].includes(r.type),walk=['path','footway','cycleway','pedestrian','steps'].includes(r.type);const width=major ? .10 : walk ? .025 : .05;for(let i=1;i<pts.length;i++){const a=pts[i-1],b=pts[i];if(Math.max(Math.abs(a.x),Math.abs(b.x))>5.2||Math.max(Math.abs(a.y),Math.abs(b.y))>3.7)continue;ribbon([a,b],width+(walk?0:.025),walk?detailMaterials.roadLight:detailMaterials.road,.18);roadSegments.push({a,b});}});
- combinedBuildings.forEach((b,i)=>{if(seenB.has(b.osmId))return;seenB.add(b.osmId);let pts=b.points.map(local);if(pts.length>2&&pts[0].distanceTo(pts[pts.length-1])<.001)pts.pop();if(pts.length<3)return;const c=pts.reduce((s,p)=>s.add(p),new THREE.Vector2()).multiplyScalar(1/pts.length);if(Math.abs(c.x)>4.9||Math.abs(c.y)>3.35)return;const nearRiver=Math.abs(c.x-local([126.8766,corridorCenter.lat]).x)<.22;if(nearRiver)return;const h=THREE.MathUtils.clamp(b.height*.0048,.07,.82),shape=shapeFrom(pts),palette=c.x>.1?[0xd7d4c7,0xc6c8c0,0xe0d7c3,0xb9c2bb]:[0xd8c8aa,0xc8b695,0xe2d6bd,0xb8b99f];const bm=keepMat(new THREE.MeshStandardMaterial({color:palette[i%palette.length],roughness:.9}));const m=makeMesh(new THREE.ExtrudeGeometry(shape,{depth:h,bevelEnabled:false}),bm,detailGroup);m.rotation.x=-Math.PI/2;m.position.y=.18;if(h>.25&&i%4===0){const roof=makeMesh(new THREE.BoxGeometry(.055,.04,.055),detailMaterials.roadLight,detailGroup);roof.position.set(c.x,.2+h+.02,c.y);}});
- // Park and riverside trees, kept clear of the main channel.
- let seed=83;const rand=()=>{seed=(seed*16807)%2147483647;return(seed-1)/2147483646;};const trunkGeo=keepGeo(new THREE.CylinderGeometry(.013,.017,.13,6)),crownGeo=keepGeo(new THREE.IcosahedronGeometry(.075,1));for(let i=0;i<150;i++){let x,z;if(i<90){x=-4.8+rand()*3.8;z=-3.25+rand()*3.6;}else{const p=riverGeo[Math.floor(rand()*(riverGeo.length-1))].clone().lerp(riverGeo[Math.min(riverGeo.length-1,1+Math.floor(rand()*(riverGeo.length-1)))],rand());x=p.x+(rand()>.5 ? .38 : -.38);z=p.y;}if(Math.abs(x)>4.85||Math.abs(z)>3.3)continue;const tr=makeMesh(trunkGeo,detailMaterials.trunk,detailGroup);tr.position.set(x,.255,z);const cr=makeMesh(crownGeo,i%3?detailMaterials.tree:detailMaterials.tree2,detailGroup);cr.position.set(x,.36,z);cr.scale.set(.75+rand()*.7,.85+rand()*.6,.75+rand()*.7);}
- // Soft water glints that drift downstream.
- const glintMat=keepMat(new THREE.LineBasicMaterial({color:0xd7ffff,transparent:true,opacity:.48}));for(let i=0;i<9;i++){const base=riverGeo[Math.min(riverGeo.length-2,Math.floor(i/2))].clone().lerp(riverGeo[Math.min(riverGeo.length-1,1+Math.floor(i/2))],(i%2)*.45+.2);const line=new THREE.Line(keepGeo(new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(base.x-.08,.17,base.y),new THREE.Vector3(base.x+.08,.17,base.y+.02)])),glintMat);line.userData.phase=i*.7;detailGroup.add(line);}
- const labelPoint=(coord,y=.75)=>{const p=local(coord);return new THREE.Vector3(p.x,y,p.y)};detailLabels=[{name:'철산동',sub:'CHEOLSAN-DONG',pos:labelPoint([126.8695,37.4801],.68)},{name:'안양천',sub:'ANYANGCHEON',pos:labelPoint([126.8764,37.4793],.5),kind:'river-label'},{name:'가산디지털단지',sub:'GASAN DIGITAL',pos:labelPoint([126.883,37.4805],.82)},{name:'도덕산',sub:'DODEOKSAN',pos:labelPoint([126.8662,37.4728],.6)},{name:'철산교',sub:'BRIDGE',pos:labelPoint([126.8762,37.4819],.42)}];
+async function buildDetail(){
+ const response=await fetch('/data/corridor.json');if(!response.ok)throw new Error('Map data could not load');const data=await response.json();
+ features=data.features.map(f=>({...f,points:f.points.map(project)}));
+ riverLine=features.find(f=>f.tags.waterway==='river'&&f.tags.name==='안양천').points;
+ riverPolygons=features.filter(f=>f.tags.natural==='water').map(f=>f.points);
+ const size=localBounds[1].clone().sub(localBounds[0]),center=localBounds[0].clone().lerp(localBounds[1],.5);
+ // The entire map surface sits above the base; roads, parks and water cannot be buried.
+ mesh(new THREE.BoxGeometry(size.x,.1,size.y).translate(center.x,-.053,center.y),m.base);
+ mesh(new THREE.PlaneGeometry(size.x,size.y).rotateX(-Math.PI/2).translate(center.x,0,center.y),m.ground,detail,false);
+ for(const f of features){const t=f.tags;
+  if(t.landuse&&!t.highway){const material=['grass','recreation_ground','forest'].includes(t.landuse)?m.grass:t.landuse==='residential'?mat(0xd3d9c9):t.landuse==='construction'?mat(0xc2bda7):m.curb;plane(f.points,material,.003);}
+ }
+ // The OSM river centerline and banks are continuous across both districts.
+ batch(stripGeometry(riverLine,.73,.007),m.bank);batch(stripGeometry(riverLine,.43,.009),m.sand);
+ const waterShadow=new THREE.ShadowMaterial({color:0x18363c,opacity:.32,depthWrite:false});
+ for(const f of features.filter(f=>f.tags.natural==='water')){mesh(flatGeometry(f.points,.016),riverMat,detail,false);mesh(flatGeometry(f.points,.0163),waterShadow,detail,false);}
+ for(const f of features){const t=f.tags;
+  if(t.natural==='wood'||['park','garden','pitch','playground'].includes(t.leisure)){
+   const wooded=t.natural==='wood',sport=t.leisure==='pitch';plane(f.points,wooded?m.wood:sport?m.court:m.park,.009);
+   if(!sport&&t.leisure!=='playground')parkPolygons.push({points:f.points,wooded});
+   if(sport){batch(stripGeometry([...f.points,f.points[0]],.0018,.012),m.lane);}
+  }
+ }
+ const roadWidth={motorway:12,trunk:11,primary:10,secondary:10,tertiary:8,residential:6,living_street:5,unclassified:5,service:3.5,footway:2,path:1.5,cycleway:3,steps:1.5,pedestrian:5};
+ for(const f of features){const t=f.tags;if(!t.highway||['construction','proposed','corridor'].includes(t.highway)||t.tunnel==='yes'||t.covered==='yes'||Number(t.layer)<0)continue;
+  const foot=['footway','path','steps','cycleway','pedestrian'].includes(t.highway),width=(parseFloat(t.width)||roadWidth[t.highway]||5)*SCALE;
+  const pts=[];for(let i=1;i<f.points.length;i++){const a=f.points[i-1],b=f.points[i],steps=Math.max(1,Math.ceil(a.distanceTo(b)/.04));if(!pts.length)pts.push(a);for(let j=1;j<=steps;j++)pts.push(a.clone().lerp(b,j/steps));}
+  if(pts.length<2)continue;
+  batch(stripGeometry(pts,width+.009,p=>roadHeight(p,f)-.003),foot?m.grass:m.curb);
+  batch(stripGeometry(pts,width,p=>roadHeight(p,f)),foot?(t.highway==='cycleway'?m.cycle:m.path):m.road);
+  if(!foot){roadPaths.push({points:f.points,width,box:new THREE.Box2().setFromPoints(f.points).expandByScalar(width)});
+   if(['primary','secondary','tertiary'].includes(t.highway)){
+    const path=getPath(pts);
+    for(let distance=.015;distance<path.length;distance+=.05){const a=atPath(path,distance).point,b=atPath(path,Math.min(distance+.021,path.length-.00001)).point;batch(stripGeometry([a,b],.0012,p=>roadHeight(p,f)+.0007),m.lane);}
+    if(path.length>.35)traffic.push({path,road:f,speed:.025+random()*.025,offset:random()*path.length,reverse:random()>.5,width});
+   }
+  }
+  // Raised crossings cast real shadows on the channel.
+  if(t.bridge==='yes'&&!foot){for(let i=0;i<pts.length;i+=Math.max(1,Math.floor(pts.length/3))){const p=pts[i],h=roadHeight(p,f);if(riverDistance(p)<.24)batch(new THREE.BoxGeometry(width*.6,h,.01).translate(p.x,h/2,p.y),m.concrete);}}
+ }
+ for(const f of features.filter(f=>f.tags.railway==='rail'&&f.tags.tunnel!=='yes'&&Number(f.tags.layer||0)>=0)){
+  batch(stripGeometry(f.points,.016,.028),m.railBed);batch(stripGeometry(f.points,.0055,.03),m.rail);
+  const path=getPath(f.points);for(let d=.01;d<path.length;d+=.012){const {point:p,angle}=atPath(path,d);const a=new THREE.Vector2(p.x+Math.cos(angle)*.005,p.y-Math.sin(angle)*.005),b=new THREE.Vector2(p.x-Math.cos(angle)*.005,p.y+Math.sin(angle)*.005);batch(stripGeometry([a,b],.0015,.031),m.roofDark);}
+  if(!trainPath||path.length>trainPath.length)trainPath=path;
+ }
+ features.filter(f=>f.tags.building&&f.tags.building!=='construction').forEach(buildBuilding);
+ const trees=[];
+ for(const park of parkPolygons){const box=new THREE.Box2().setFromPoints(park.points),sz=box.getSize(new THREE.Vector2()),n=Math.min(1300,Math.round(sz.x*sz.y*(park.wooded?260:90)));
+  for(let i=0;i<n;i++){const p=new THREE.Vector2(box.min.x+random()*sz.x,box.min.y+random()*sz.y);if(within(p)&&inside(p,park.points)&&!inBuilding(p)&&!nearRoad(p)&&!riverPolygons.some(poly=>inside(p,poly)))trees.push(p);}
+ }
+ // Riverside avenues follow mapped paths; planting avoids buildings and the channel.
+ for(let z=localBounds[0].y+.04;z<localBounds[1].y;z+=.057){for(const side of [-1,1]){const p=new THREE.Vector2(riverX(z)+side*(.26+random()*.055),z);if(within(p)&&!inBuilding(p)&&!nearRoad(p)&&!riverPolygons.some(poly=>inside(p,poly)))trees.push(p);}}
+ for(const r of roadPaths.filter(r=>r.width>=.03)){const path=getPath(r.points);for(let d=.03;d<path.length;d+=.13){const{point:p,angle}=atPath(path,d);p.x+=Math.cos(angle)*(r.width/2+.016);p.y-=Math.sin(angle)*(r.width/2+.016);if(within(p)&&!inBuilding(p)&&!riverPolygons.some(poly=>inside(p,poly)))trees.push(p);}}
+ placeTrees(trees);placeStreetlights();flush();
+ traffic=traffic.slice(0,110);
+ trafficBody=new THREE.InstancedMesh(new THREE.BoxGeometry(.007,.005,.017),mat(0xffffff,{roughness:.45}),traffic.length);
+ trafficRoof=new THREE.InstancedMesh(new THREE.BoxGeometry(.0055,.0025,.008),mat(0x39545b,{roughness:.3}),traffic.length);
+ trafficBody.castShadow=true;detail.add(trafficBody,trafficRoof);
+ const carColors=[0xf6f5ed,0xb9c5c6,0x536a77,0xede9dd,0xaeb9bb,0xc77455,0x4d6d54];traffic.forEach((_,i)=>trafficBody.setColorAt(i,new THREE.Color(carColors[i%7])));
+ if(trainPath){trainBody=new THREE.InstancedMesh(new THREE.BoxGeometry(.012,.012,.07),mat(0xebedef,{roughness:.45}),6);trainBody.castShadow=true;detail.add(trainBody);}
+ return {buildings:buildingPolygons.length,trees:trees.length,features:features.length};
 }
 
-function setLabels(items){$('#labels').innerHTML='';items.forEach(item=>{const el=document.createElement('div');el.className=`map-label ${item.kind||''}`;el.innerHTML=`<strong>${item.name}</strong><small>${item.sub}</small><i></i>`;$('#labels').appendChild(el);item.el=el;});}
-const koreaCam=new THREE.Vector3(6.8,9.4,8.6),koreaTarget=new THREE.Vector3(.15,.25,.25),detailCam=new THREE.Vector3(8.7,8.5,9.5),detailTarget=new THREE.Vector3(0,.12,0);
-function updateOffset(){if(innerWidth>800)camera.setViewOffset(innerWidth,innerHeight,-125,0,innerWidth,innerHeight);else camera.clearViewOffset();}
-function fly(to,target,duration=1050){transition={from:camera.position.clone(),to:to.clone(),fromTarget:controls.target.clone(),target:target.clone(),start:performance.now(),duration};controls.enabled=false;}
-function showKorea(){mode='korea';document.body.classList.remove('detail');koreaGroup.visible=true;detailGroup.visible=false;$('#enter-place').hidden=false;$('#back-korea').hidden=true;$('#map-key').hidden=true;$('#eyebrow').textContent='A LITTLE MAP OF KOREA';$('#title').innerHTML='대한민국,<br>조금 더 가까이.';$('#lede').innerHTML='바다 위에 떠 있는 우리 동네.<br>철산에서 안양천까지 천천히 내려다보세요.';setLabels(koreaLabels);controls.minDistance=5.6;controls.maxDistance=22;controls.maxPolarAngle=1.35;zoomLock=true;fly(koreaCam,koreaTarget);setTimeout(()=>zoomLock=false,1200);}
-async function showDetail(){if(mode==='detail')return;await buildDetail();mode='detail';document.body.classList.add('detail');koreaGroup.visible=false;detailGroup.visible=true;$('#enter-place').hidden=true;$('#back-korea').hidden=false;$('#map-key').hidden=false;$('#eyebrow').textContent='CHEOLSAN · ANYANGCHEON · GASAN';$('#title').innerHTML='철산과 가산 사이,<br>안양천.';$('#lede').innerHTML='도덕산의 초록과 디지털단지의 빌딩 사이로<br>물이 흐르는 진짜 동네의 모양.';setLabels(detailLabels);controls.minDistance=4.5;controls.maxDistance=24;controls.maxPolarAngle=1.28;fly(detailCam,detailTarget,1200);}
-$('#enter-place').onclick=showDetail;$('#back-korea').onclick=showKorea;$('#reset').onclick=()=>mode==='korea'?fly(koreaCam,koreaTarget,700):fly(detailCam,detailTarget,700);
-controls.addEventListener('change',()=>{if(mode==='korea'&&!zoomLock&&camera.position.distanceTo(controls.target)<6.25)showDetail();});
-function updateTime(){const now=new Date(),kst=new Date(now.getTime()+9*3600000);minute=kst.getUTCHours()*60+kst.getUTCMinutes();$('#clock').textContent=`${String(kst.getUTCHours()).padStart(2,'0')}:${String(kst.getUTCMinutes()).padStart(2,'0')}`;const hour=kst.getUTCHours(),theta=(minute/60-6)/12*Math.PI;daylight=Math.max(0,Math.sin(theta));const labels=hour<5?'깊은 밤':hour<8?'아침빛':hour<12?'맑은 오전':hour<17?'햇살 좋은 오후':hour<20?'노을빛': '고요한 밤';$('#period').textContent=labels;sun.position.set(Math.cos(theta)*12,Math.max(.6,Math.sin(theta)*14),6);sun.intensity=.32+daylight*4.2;hemi.intensity=.52+daylight*.45;fill.intensity=.12+daylight*.16;renderer.toneMappingExposure=.96+daylight*.2;seaUniforms.uDay.value=.18+daylight*.82;seaUniforms.uSunX.value=.5+Math.cos(theta)*.26;document.body.classList.toggle('night',daylight<.08);}
-updateTime();setInterval(updateTime,30000);
-camera.position.copy(koreaCam);controls.target.copy(koreaTarget);updateOffset();controls.minDistance=5.6;controls.maxDistance=22;controls.update();setLabels(koreaLabels);
-const projected=new THREE.Vector3();let frame=0;
-function animate(now){requestAnimationFrame(animate);seaUniforms.uTime.value=now*.001;if(transition){const t=Math.min(1,(now-transition.start)/transition.duration),e=1-Math.pow(1-t,4);camera.position.lerpVectors(transition.from,transition.to,e);controls.target.lerpVectors(transition.fromTarget,transition.target,e);if(t===1){transition=null;controls.enabled=true;}}controls.update();const labels=mode==='korea'?koreaLabels:detailLabels;labels.forEach(item=>{projected.copy(item.pos).project(camera);const visible=projected.z<1;item.el.style.display=visible?'flex':'none';if(visible){item.el.style.left=`${(projected.x*.5+.5)*innerWidth}px`;item.el.style.top=`${(-projected.y*.5+.5)*innerHeight}px`;}});if(mode==='detail'&&frame++%2===0){detailGroup.children.forEach(o=>{if(o.isLine&&o.userData.phase!==undefined)o.material.opacity=.28+.25*Math.sin(now*.002+o.userData.phase);});}renderer.render(scene,camera);}
-requestAnimationFrame(animate);$('#loading').classList.add('hidden');$('#loading').setAttribute('aria-hidden','true');
-window.addEventListener('resize',()=>{camera.aspect=innerWidth/innerHeight;updateOffset();camera.updateProjectionMatrix();renderer.setSize(innerWidth,innerHeight);});
-window.sogeum={showKorea,showCheolsan:showDetail,getState:()=>({view:mode,koreaTime:$('#clock').textContent,daylight})};
-if(document.modelContext?.registerTool){const lifecycle=new AbortController();for(const tool of [{name:'read_korea_map',title:'Read Korea map state',description:'Read whether the 3D map is showing Korea or the Cheolsan–Anyangcheon corridor.',inputSchema:{type:'object',properties:{},additionalProperties:false},annotations:{readOnlyHint:true,untrustedContentHint:false},execute:()=>window.sogeum.getState()},{name:'open_cheolsan_map',title:'Open Cheolsan and Anyangcheon',description:'Zoom the visible 3D map into the Cheolsan–Anyangcheon–Gasan Digital corridor.',inputSchema:{type:'object',properties:{},additionalProperties:false},annotations:{readOnlyHint:false,untrustedContentHint:false},execute:async()=>{await showDetail();return window.sogeum.getState();}}]){try{Promise.resolve(document.modelContext.registerTool(tool,{signal:lifecycle.signal})).catch(()=>{});}catch{}}window.addEventListener('pagehide',()=>lifecycle.abort(),{once:true});}
+const kProject=([lon,lat])=>new THREE.Vector2((lon-127.7)*Math.cos(36*Math.PI/180)*1.8,-(lat-36)*1.8);
+async function buildKorea(){
+ const res=await fetch('/data/korea.geojson');if(!res.ok)throw new Error('Korea outline could not load');const kor=await res.json();
+ const polys=kor.geometry.type==='MultiPolygon'?kor.geometry.coordinates: [kor.geometry.coordinates];
+ const area=ring=>Math.abs(ring.reduce((sum,a,i)=>{const b=ring[(i+1)%ring.length];return sum+a[0]*b[1]-b[0]*a[1];},0));polys.sort((a,b)=>area(b[0])-area(a[0]));
+ const sea=mesh(new THREE.PlaneGeometry(70,70).rotateX(-Math.PI/2).translate(0,-.05,0),seaMat,country,false);
+ const green=mat(0x6d9263),edge=mat(0xa8bba0);
+ for(const coords of polys){const ring=coords[0].map(kProject),shape=polygon(ring);mesh(new THREE.ExtrudeGeometry(shape,{depth:.12,bevelEnabled:false}).rotateX(-Math.PI/2).translate(0,-.035,0),edge,country);mesh(flatGeometry(ring,.089),green,country);}
+ // Smooth relief in the Taebaek / Sobaek spine, contained within the mainland.
+ const mainland=polys[0][0].map(kProject),hillGeo=new THREE.PlaneGeometry(6.6,8.6,160,200).rotateX(-Math.PI/2),pa=hillGeo.getAttribute('position');
+ const mountains=[[128.4,37.6,.34],[128.2,36.9,.28],[127.7,36.0,.22],[127.6,35.4,.28],[129.0,35.7,.18]];
+ const reliefColors=[];
+ for(let i=0;i<pa.count;i++){const p=new THREE.Vector2(pa.getX(i),pa.getZ(i));let h=0;if(inside(p,mainland)){for(const [lon,lat,amp]of mountains){const c=kProject([lon,lat]);h+=amp*Math.exp(-p.distanceToSquared(c)/.42);}h*=.9+.10*Math.sin(p.x*10+p.y*3)*Math.cos(p.y*8);}pa.setY(i,.095+h);const color=new THREE.Color().lerpColors(new THREE.Color(0x829d6b),new THREE.Color(0x416c53),clamp(h*2.3,0,1));reliefColors.push(color.r,color.g,color.b);}
+ // Remove triangles outside the coastline instead of putting a rectangle over it.
+ const idx=hillGeo.getIndex(),kept=[];for(let i=0;i<idx.count;i+=3){const ids=[idx.getX(i),idx.getX(i+1),idx.getX(i+2)];if(ids.every(j=>inside(new THREE.Vector2(pa.getX(j),pa.getZ(j)),mainland)))kept.push(...ids);}hillGeo.setIndex(kept);hillGeo.setAttribute('color',new THREE.Float32BufferAttribute(reliefColors,3));hillGeo.computeVertexNormals();mesh(hillGeo,mat(0xffffff,{vertexColors:true}),country);
+ const p=kProject([126.875,37.4805]);mesh(new THREE.CylinderGeometry(.027,.027,.3,12).translate(p.x,.21,p.y),mat(0xeabd69),country);mesh(new THREE.SphereGeometry(.065,20,12).translate(p.x,.4,p.y),mat(0xffdf98,{emissive:0x8a5b24,emissiveIntensity:.3}),country);
+}
+
+const labelSpec=[
+ {name:'철산동',sub:'CHEOLSAN',coord:[126.8688,37.4805],height:.17},
+ {name:'가산디지털단지',sub:'GASAN DIGITAL',coord:[126.8806,37.4809],height:.4},
+ {name:'안양천',sub:'ANYANGCHEON',coord:[126.8747,37.4794],height:.04,kind:'water'},
+ {name:'철산교',sub:'CHEOLSAN BRIDGE',coord:[126.8770,37.4749],height:.1,kind:'minor'},
+ {name:'광명대교',sub:'GWANGMYEONG BRIDGE',coord:[126.8724,37.4851],height:.1,kind:'minor'},
+ {name:'철산근린공원',sub:'CHEOLSAN PARK',coord:[126.8713,37.4721],height:.08,kind:'minor'}
+];
+function setLabels(){const spec=mode==='detail'?labelSpec:[{name:'철산 · 안양천',sub:'CHEOLSAN',coord:[126.875,37.4805],height:.55},{name:'서울',sub:'SEOUL',coord:[127.14,37.75],height:.18,kind:'minor'},{name:'부산',sub:'BUSAN',coord:[129.07,35.18],height:.14},{name:'제주',sub:'JEJU',coord:[126.53,33.38],height:.13}];$('#labels').replaceChildren();labels=spec.map(s=>{const p=mode==='detail'?project(s.coord):kProject(s.coord);const el=document.createElement('div');el.className=`map-label ${s.kind||''}`;const body=document.createElement('div');body.className='label-body';body.textContent=s.name;const small=document.createElement('small');small.textContent=s.sub;body.append(small);el.append(body,document.createElement('i'));$('#labels').append(el);return{...s,pos:new THREE.Vector3(p.x,s.height,p.y),el};});}
+function homePosition(){return mode==='detail'?new THREE.Vector3(1.8,7.4,8.2):new THREE.Vector3(3.3,9.8,8.6);}
+function homeTarget(){return mode==='detail'?new THREE.Vector3(.1,0,.1):new THREE.Vector3(0,0,.1);}
+function fly(position,target,duration=1300){animation={from:camera.position.clone(),to:position.clone(),fromTarget:controls.target.clone(),target:target.clone(),start:performance.now(),duration:reduced?1:duration};controls.enabled=false;}
+function stopTour(){autoTour=false;controls.autoRotate=false;$('#tour').setAttribute('aria-pressed','false');$('#tour').innerHTML='<span>▷</span> 천천히 둘러보기';}
+function setMode(next){if(next===mode)return;stopTour();mode=next;detail.visible=mode==='detail';country.visible=mode==='korea';
+ $('#enter-place').classList.toggle('active',mode==='detail');$('#back-korea').classList.toggle('active',mode==='korea');$('#enter-place').setAttribute('aria-pressed',String(mode==='detail'));$('#back-korea').setAttribute('aria-pressed',String(mode==='korea'));
+ $('#eyebrow').textContent=mode==='detail'?'CHEOLSAN · GASAN':'SOUTH KOREA';$('#title').textContent=mode==='detail'?'안양천을 따라서.':'대한민국, 가까이.';$('#lede').innerHTML=mode==='detail'?'철산의 주거지와 가산의 빌딩 숲,<br>그 사이로 흐르는 일상의 풍경.':'바다를 지나, 우리 동네로.<br>안양천을 눌러 철산으로 돌아오세요.';$('#place-region').textContent=mode==='detail'?'광명시 철산동 ↔ 금천구 가산동':'한반도의 산과 바다';controls.minDistance=mode==='detail'?1.2:5;setLabels();fly(homePosition(),homeTarget());}
+function updateSun(){const now=new Date(),position=sunDirection(now),day=clamp((position.altitude+.10)/.55,0,1),above=Math.max(0,Math.sin(position.altitude));
+ sun.position.copy(position.vector).multiplyScalar(20);sun.intensity=position.altitude>0?2.4+above:0;sun.color.setHex(position.altitude<.18?0xffcf98:0xfff2dc);skyLight.intensity=.20+day*1.85;bounce.intensity=.06+day*.43;scene.environmentIntensity=.09+day*.16;renderer.toneMappingExposure=1.12;
+ const night=1-clamp((position.altitude+.12)/.15,0,1);facadeMats.forEach((material,i)=>material.emissiveIntensity=night*(i===2||i===3?.48:.7));nightLights.visible=night>.15;document.body.classList.toggle('night',night>.4);
+ const background=new THREE.Color().lerpColors(new THREE.Color(0x173448),new THREE.Color(0xe4edf0),day);scene.background=background;scene.fog.color.copy(background);
+ waterMaterials.forEach(m=>{m.uniforms.uSun.value.copy(position.vector);m.uniforms.uDay.value=day;});
+ $('#clock').textContent=new Intl.DateTimeFormat('en-GB',{timeZone:'Asia/Seoul',hour:'2-digit',minute:'2-digit'}).format(now);
+ $('#period').textContent=position.altitude<-.10?'고요한 밤':position.altitude<0?'해 질 무렵':position.altitude<.18?'따뜻한 낮은 햇살':'햇살이 머무는 오후';$('#sun-angle').textContent=`태양 고도 ${(position.altitude*180/Math.PI).toFixed(1)}°`;$('#sun-symbol').textContent=position.altitude<0?'☾':'☀';
+ return position;
+}
+$('#enter-place').onclick=()=>setMode('detail');$('#back-korea').onclick=()=>setMode('korea');
+$('#reset').onclick=()=>{stopTour();fly(homePosition(),homeTarget(),850);};
+$('#top-view').onclick=()=>{stopTour();fly(controls.target.clone().add(new THREE.Vector3(0,Math.max(3,camera.position.distanceTo(controls.target)),.05)),controls.target,900);};
+function zoom(factor){stopTour();const offset=camera.position.clone().sub(controls.target),length=clamp(offset.length()*factor,controls.minDistance,controls.maxDistance);fly(controls.target.clone().add(offset.setLength(length)),controls.target,420);}
+$('#zoom-in').onclick=()=>zoom(.73);$('#zoom-out').onclick=()=>zoom(1.37);
+$('#tour').onclick=()=>{autoTour=!autoTour;controls.autoRotate=autoTour;controls.autoRotateSpeed=.32;$('#tour').setAttribute('aria-pressed',String(autoTour));$('#tour').innerHTML=autoTour?'<span>Ⅱ</span> 둘러보기 멈추기':'<span>▷</span> 천천히 둘러보기';};
+controls.addEventListener('start',()=>{stopTour();animation=null;controls.enabled=true;});
+function resize(){camera.aspect=innerWidth/innerHeight;camera.updateProjectionMatrix();renderer.setSize(innerWidth,innerHeight);}
+addEventListener('resize',resize);
+let last=0,frame=0;
+const projected=new THREE.Vector3();
+function animate(time){requestAnimationFrame(animate);const dt=Math.min(.04,(time-last)/1000)||0;last=time;
+ if(animation){const t=clamp((time-animation.start)/animation.duration,0,1),e=t*t*(3-2*t);camera.position.lerpVectors(animation.from,animation.to,e);controls.target.lerpVectors(animation.fromTarget,animation.target,e);if(t>=1){animation=null;controls.enabled=true;}}
+ controls.update(dt);
+ if(mode==='detail'){controls.target.x=clamp(controls.target.x,localBounds[0].x+1,localBounds[1].x-1);controls.target.z=clamp(controls.target.z,localBounds[0].y+1,localBounds[1].y-1);}
+ const t=reduced?0:time/1000;waterMaterials.forEach(m=>m.uniforms.uTime.value=t);
+ if(mode==='detail'&&trafficBody){traffic.forEach((car,i)=>{const {point:p,angle}=atPath(car.path,car.offset+(car.reverse?-1:1)*t*car.speed),side=car.reverse?-1:1;p.x+=Math.cos(angle)*car.width*.22*side;p.y-=Math.sin(angle)*car.width*.22*side;dummy.position.set(p.x,roadHeight(p,car.road)+.004,p.y);dummy.rotation.set(0,angle,0);dummy.scale.set(1,1,1);dummy.updateMatrix();trafficBody.setMatrixAt(i,dummy.matrix);dummy.position.y+=.003;dummy.updateMatrix();trafficRoof.setMatrixAt(i,dummy.matrix);});trafficBody.instanceMatrix.needsUpdate=true;trafficRoof.instanceMatrix.needsUpdate=true;
+ if(trainBody)for(let i=0;i<6;i++){const{point:p,angle}=atPath(trainPath,t*.065+i*.081);dummy.position.set(p.x,.039,p.y);dummy.rotation.set(0,angle,0);dummy.updateMatrix();trainBody.setMatrixAt(i,dummy.matrix);trainBody.instanceMatrix.needsUpdate=true;}}
+ if(frame++%2===0){const occupied=[];for(const label of labels){projected.copy(label.pos).project(camera);const x=(projected.x*.5+.5)*innerWidth,y=(-projected.y*.5+.5)*innerHeight;const width=label.kind==='minor'?95:120;const blocked=occupied.some(b=>Math.abs(x-b.x)<(width+b.w)/2&&Math.abs(y-b.y)<55);const visible=projected.z<1&&x>35&&x<innerWidth-35&&y>165&&y<innerHeight-55&&!blocked&&!(x<(innerWidth<750?285:395)&&y>innerHeight-(innerWidth<750?290:360));label.el.hidden=!visible;if(visible){occupied.push({x,y,w:width});label.el.style.left=`${x}px`;label.el.style.top=`${y}px`;}}
+ $('#compass-needle').style.transform=`rotate(${-controls.getAzimuthalAngle()*180/Math.PI}deg)`;
+ const distance=camera.position.distanceTo(controls.target),meters=mode==='detail'?(distance<4?100:200):100000;
+ const scale=mode==='detail'?SCALE:1.8/111320;const pixels=meters*scale*innerHeight/(2*distance*Math.tan(camera.fov*Math.PI/360));$('#scale-line').style.width=`${clamp(pixels,25,180)}px`;$('#scale-text').textContent=meters>=1000?`${meters/1000} km`:`${meters} m`;
+ }
+ renderer.render(scene,camera);
+}
+try{
+ const stats=await buildDetail();await buildKorea();updateSun();setInterval(updateSun,30000);setLabels();
+ camera.position.copy(homePosition().multiplyScalar(1.1));controls.target.copy(homeTarget());controls.update();fly(homePosition(),homeTarget(),1900);
+ renderer.compile(scene,camera);$('#loading').classList.add('hidden');$('#loading').setAttribute('aria-hidden','true');requestAnimationFrame(animate);
+ window.sogeum={showKorea:()=>setMode('korea'),showCheolsan:()=>setMode('detail'),getState:()=>({view:mode,koreaTime:$('#clock').textContent,...stats})};
+ if(document.modelContext?.registerTool){
+  const lifecycle=new AbortController();
+  for(const tool of [{name:'read_korea_map',title:'Read Korea map',description:'Read the current view and Korea time.',inputSchema:{type:'object',properties:{},additionalProperties:false},annotations:{readOnlyHint:true},execute:()=>window.sogeum.getState()},{name:'open_cheolsan_map',title:'Open Anyangcheon',description:'Show the Cheolsan–Anyangcheon–Gasan corridor.',inputSchema:{type:'object',properties:{},additionalProperties:false},annotations:{readOnlyHint:false},execute:()=>{setMode('detail');return window.sogeum.getState();}}]){
+   try{Promise.resolve(document.modelContext.registerTool(tool,{signal:lifecycle.signal})).catch(()=>{});}catch{}
+  }
+  addEventListener('pagehide',()=>lifecycle.abort(),{once:true});
+ }
+}catch(error){console.error(error);$('#loading').hidden=true;$('#error').hidden=false;}
