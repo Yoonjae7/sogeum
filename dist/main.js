@@ -1,174 +1,81 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 
-const $ = (s) => document.querySelector(s);
-const icons = {
- globe:'<circle cx="12" cy="12" r="9"/><ellipse cx="12" cy="12" rx="4" ry="9"/><path d="M3 12h18M5 7h14M5 17h14"/>',
- buildings:'<path d="M3 21V9h7v12M10 21V3h9v18M1 21h21M6 12v1m0 3v1m7-10h3m-3 4h3m-3 4h3m-3 4h3"/>',
- sound:'<path d="M11 4L6 8H3v8h3l5 4V4zM15 8c3 2 3 6 0 8M18 5c5 4 5 10 0 14"/>',
- help:'<circle cx="12" cy="12" r="9"/><path d="M9.5 9a2.5 2.5 0 115 0c0 2-2.5 2-2.5 4M12 16v.1"/>',
- moon:'<path d="M20.5 14.5A9 9 0 019.5 3.5a9 9 0 1011 11z"/>',
- sun:'<circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M2 12h2m16 0h2M5 5l1.5 1.5m11 11L19 19M5 19l1.5-1.5m11-11L19 5"/>',
- compass:'<circle cx="12" cy="12" r="9"/><path d="M16 8l-2.5 5.5L8 16l2.5-5.5L16 8z"/>',
- rotate:'<path d="M20 7v5h-5M4 17v-5h5M5 7a8 8 0 0114-1l1 3M4 15l1 3a8 8 0 0014-1"/>',
- mouse:'<rect x="6" y="2" width="12" height="20" rx="6"/><path d="M12 2v7M6 9h12"/>',
- passport:'<rect x="5" y="2" width="15" height="20" rx="2"/><path d="M5 5H3v17h14"/><circle cx="12.5" cy="10" r="4"/><path d="M8.5 10h8m-4-4c-2 2-2 6 0 8 2-2 2-6 0-8M10 18h5"/>',
- pavilion:'<path d="M2 11c4-1 7-2 10-7 3 5 6 6 10 7H2zM4 16h16M5 11v9m14-9v9M9 11v9m6-9v9M2 20h20"/>',
- apartments:'<path d="M3 21V7h7v14M12 21V3h8v18M1 21h22M5 10h3m-3 4h3m-3 4h3M14 6h4m-4 4h4m-4 4h4m-4 4h4"/>',
- waves:'<path d="M2 19c3-4 5 4 8 0s5 4 8 0 4 0 4 0M3 15V7h4v8m3 0V3h4v12m3 0V6h4v9M11 1h2"/>',
- bridge:'<path d="M2 19h20M5 19V5m14 14V5M2 11c4 0 6-2 10-5 4 3 6 5 10 5M8 10v9m4-11v11m4-9v9"/>'
-};
-const svg = (name) => `<svg viewBox="0 0 24 24" aria-hidden="true">${icons[name]||icons.buildings}</svg>`;
-document.querySelectorAll('[data-icon]').forEach(el => el.innerHTML = svg(el.dataset.icon));
+const $=s=>document.querySelector(s);
+const renderer=new THREE.WebGLRenderer({antialias:true,alpha:false,powerPreference:'high-performance'});
+renderer.setPixelRatio(Math.min(devicePixelRatio,2));renderer.setSize(innerWidth,innerHeight);renderer.setClearColor(0xc9dad6);renderer.outputColorSpace=THREE.SRGBColorSpace;renderer.toneMapping=THREE.ACESFilmicToneMapping;renderer.toneMappingExposure=1.12;renderer.shadowMap.enabled=true;renderer.shadowMap.type=THREE.PCFSoftShadowMap;$('#scene').appendChild(renderer.domElement);
+const scene=new THREE.Scene();scene.fog=new THREE.FogExp2(0xc9dad6,.023);
+const camera=new THREE.PerspectiveCamera(38,innerWidth/innerHeight,.1,120);
+const controls=new OrbitControls(camera,renderer.domElement);controls.enableDamping=true;controls.dampingFactor=.06;controls.enablePan=false;controls.rotateSpeed=.48;controls.zoomSpeed=.65;controls.maxPolarAngle=1.28;
+const hemi=new THREE.HemisphereLight(0xfff3d9,0x355c57,.85);scene.add(hemi);
+const sun=new THREE.DirectionalLight(0xffe5b1,3.8);sun.castShadow=true;sun.shadow.mapSize.set(2048,2048);sun.shadow.camera.left=-9;sun.shadow.camera.right=9;sun.shadow.camera.top=9;sun.shadow.camera.bottom=-9;sun.shadow.camera.near=.1;sun.shadow.camera.far=45;sun.shadow.bias=-.0003;sun.shadow.normalBias=.025;scene.add(sun);
+const fill=new THREE.DirectionalLight(0xa9cfca,.2);fill.position.set(-5,4,-6);scene.add(fill);
+const koreaGroup=new THREE.Group(),detailGroup=new THREE.Group();scene.add(koreaGroup,detailGroup);detailGroup.visible=false;
+let mode='korea',transition=null,minute=0,daylight=.5,detailBuilt=false,zoomLock=false;
+const meshes=[],materials=[],geometries=[];const keepGeo=g=>(geometries.push(g),g),keepMat=m=>(materials.push(m),m);
 
-export const places = [
- {id:'jonggak',name:'Jonggak',ko:'종각',region:'Seoul',lat:37.5702,lon:126.9831,icon:'pavilion',tag:'Old Seoul, softly unfolding',title:'The heart of old Seoul.',description:'Bell pavilion, little alleyways, and a city full of stories.',landmark:'Bosingak bell pavilion',color:0xb38969},
- {id:'gangnam',name:'Gangnam',ko:'강남',region:'Seoul',lat:37.4979,lon:127.0276,icon:'buildings',tag:'A little city that never sleeps',title:'A different kind of sparkle.',description:'Follow Gangnam-daero through a forest of tiny city towers.',landmark:'Gangnam Station crossroads',color:0xb7b5a5},
- {id:'cheolsan',name:'Cheolsan',ko:'철산',region:'Gyeonggi-do',lat:37.476,lon:126.8683,icon:'apartments',tag:'Everyday life, in miniature',title:'The beauty of the everyday.',description:'Apartment gardens and familiar corners of Gwangmyeong.',landmark:'Cheolsan Station',color:0xc6b995},
- {id:'gasan',name:'Gasan Digital',ko:'가산',region:'Seoul',lat:37.4811,lon:126.8825,icon:'buildings',tag:'Big ideas in small buildings',title:'Where little ideas grow.',description:'The offices and workshops around Gasan Digital Complex.',landmark:'Gasan Digital Complex Station',color:0xb79e85},
- {id:'haeundae',name:'Haeundae',ko:'해운대',region:'Busan',lat:35.1587,lon:129.1604,icon:'waves',tag:'A breath of sea air',title:'Meet me by the sea.',description:'A sandy crescent, ocean breezes, and Busan’s beachside streets.',landmark:'Haeundae Beach',color:0xd0be9c},
- {id:'busan',name:'Busan',ko:'부산',region:'City Hall',lat:35.1796,lon:129.0756,icon:'bridge',tag:'A new corner of the city',title:'Slow down in Busan.',description:'A tiny world around City Hall, in the heart of Yeonje-gu.',landmark:'Busan City Hall',color:0xc1aa89}
-];
-let selected=places[0], mode='globe', minute=0, stamps=new Set(), soundEnabled=false;
-try { stamps=new Set(JSON.parse(localStorage.getItem('sogeum-stamps')||'[]').filter(id=>places.some(p=>p.id===id))); } catch {}
-$('#destinations').innerHTML=places.map(p=>`<button class="destination" data-id="${p.id}" aria-label="Visit ${p.name}, ${p.ko}, ${p.region}"><span class="dest-thumb">${svg(p.icon)}</span><span class="dest-text"><strong>${p.name}<em>${p.ko}</em></strong><small>${p.region}${p.id==='jonggak'?' <span class="capital-label"> · Capital</span>':''} · ${p.id==='haeundae'?'By the sea':p.id==='jonggak'?'History':p.id==='gangnam'?'City lights':p.id==='cheolsan'?'Neighborhood':p.id==='gasan'?'Digital district':'City center'}</small></span><span class="dest-arrow">↗</span></button>`).join('');
-function updatePassport(){ $('#stamp-count').textContent=`${stamps.size}/6`; $('#stamp-status').textContent=stamps.size===6?'Every little corner, discovered.':stamps.size?`${stamps.size} little ${stamps.size===1?'star':'stars'} collected`:'Find a star in every neighborhood'; }
-updatePassport();
-let toastTimeout;
-function toast(message){$('#toast').textContent=message;$('#toast').classList.add('show');clearTimeout(toastTimeout);toastTimeout=setTimeout(()=>$('#toast').classList.remove('show'),3300);}
+const seaUniforms={uTime:{value:0},uDay:{value:.5},uSunX:{value:.5}};
+const seaMat=keepMat(new THREE.ShaderMaterial({uniforms:seaUniforms,side:THREE.DoubleSide,vertexShader:`
+uniform float uTime;varying vec2 vUv;varying float vWave;
+void main(){vUv=uv;vec3 p=position;float w=sin(p.x*.55+uTime*.35)*.10+cos(p.y*.7-uTime*.28)*.07+sin((p.x+p.y)*1.2+uTime*.22)*.025;p.z+=w;vWave=w;gl_Position=projectionMatrix*modelViewMatrix*vec4(p,1.0);}`,
+fragmentShader:`uniform float uTime;uniform float uDay;uniform float uSunX;varying vec2 vUv;varying float vWave;
+void main(){vec3 deep=mix(vec3(.13,.34,.36),vec3(.24,.52,.53),uDay);vec3 pale=mix(vec3(.25,.45,.45),vec3(.48,.70,.66),uDay);float bands=.5+.5*sin(vUv.y*310.+vUv.x*80.+uTime*.55);float glint=pow(max(0.,1.-distance(vUv,vec2(uSunX,.52))*3.1),7.)*uDay;vec3 c=mix(deep,pale,.42+vWave*1.4)+bands*.018+glint*vec3(1.,.72,.35);gl_FragColor=vec4(c,1.);}`}));
+const sea=new THREE.Mesh(keepGeo(new THREE.PlaneGeometry(52,52,130,130)),seaMat);sea.rotation.x=-Math.PI/2;sea.position.y=-.34;sea.receiveShadow=true;scene.add(sea);
 
-const renderer=new THREE.WebGLRenderer({antialias:true,alpha:true,powerPreference:'high-performance'});
-renderer.setPixelRatio(Math.min(devicePixelRatio,2));renderer.setSize(innerWidth,innerHeight);renderer.setClearColor(0x000000,0);
-renderer.shadowMap.enabled=true;renderer.shadowMap.type=THREE.PCFSoftShadowMap;
-renderer.outputColorSpace=THREE.SRGBColorSpace;renderer.toneMapping=THREE.ACESFilmicToneMapping;renderer.toneMappingExposure=1.15;
-$('#world').appendChild(renderer.domElement);
-const scene=new THREE.Scene();
-const camera=new THREE.PerspectiveCamera(36,innerWidth/innerHeight,.1,200);
-const controls=new OrbitControls(camera,renderer.domElement);controls.enableDamping=true;controls.dampingFactor=.055;controls.enablePan=false;controls.minDistance=3.1;controls.maxDistance=11;controls.rotateSpeed=.55;controls.zoomSpeed=.65;controls.autoRotateSpeed=.45;
-const ambient=new THREE.HemisphereLight(0xfff2d4,0x2c493f,1.8);scene.add(ambient);
-const sun=new THREE.DirectionalLight(0xffedc6,3);sun.position.set(-4,5,4);sun.shadow.mapSize.set(2048,2048);Object.assign(sun.shadow.camera,{left:-6,right:6,top:6,bottom:-6,near:.2,far:35});sun.shadow.normalBias=.025;sun.shadow.bias=-.00015;scene.add(sun);
-const fill=new THREE.DirectionalLight(0xc2e0da,.45);fill.position.set(3,-1,5);scene.add(fill);
-const globeGroup=new THREE.Group();scene.add(globeGroup);
-const cityGroup=new THREE.Group();cityGroup.visible=false;scene.add(cityGroup);
-const radius=2;
-const latLon=(lat,lon,r=radius)=>{const a=THREE.MathUtils.degToRad(lat),b=THREE.MathUtils.degToRad(lon+180);return new THREE.Vector3(-r*Math.cos(a)*Math.cos(b),r*Math.sin(a),r*Math.cos(a)*Math.sin(b));};
-let globe, cityBuilder=null, cityCache=new Map(), cityRequest=0, frame=0, transition=null, starPosition=new THREE.Vector3(0,1,0);
-const nightUniform={value:new THREE.Vector3()};
-let globeLabels=[];
-function makeCanvas(w,h){const canvas=document.createElement('canvas');canvas.width=w;canvas.height=h;return canvas;}
-const worldData=await fetch('/data/world.geojson').then(r=>{if(!r.ok)throw Error('World map unavailable');return r.json();});
-function paintMap(){
- const canvas=makeCanvas(4096,2048),ctx=canvas.getContext('2d');ctx.fillStyle='#6b9d9a';ctx.fillRect(0,0,4096,2048);
- const bump=makeCanvas(4096,2048),bc=bump.getContext('2d');bc.fillStyle='#101010';bc.fillRect(0,0,4096,2048);
- const colors=['#b0be91','#b7c097','#bfc5a0','#aeba90','#c4c49c','#b6c09c'];
- const drawRing=(context,ring)=>{ring.forEach(([lon,lat],i)=>{const x=(lon+180)/360*4096,y=(90-lat)/180*2048;i?context.lineTo(x,y):context.moveTo(x,y)});context.closePath();};
- worldData.features.forEach((f,i)=>{const polygons=f.geometry.type==='Polygon'?[f.geometry.coordinates]:f.geometry.coordinates;const korea=f.properties.isoA3==='KOR'||f.properties.name==='South Korea';polygons.forEach(poly=>{ctx.beginPath();bc.beginPath();poly.forEach(ring=>{drawRing(ctx,ring);drawRing(bc,ring)});ctx.fillStyle=korea?'#e3c481':colors[i%colors.length];ctx.fill('evenodd');ctx.strokeStyle=korea?'#f2d99c':'#d2d0ac';ctx.lineWidth=korea?2.5:.8;ctx.stroke();bc.fillStyle='#eeeeee';bc.fill('evenodd');});});
- ctx.strokeStyle='#f6f1d70c';ctx.lineWidth=1;for(let i=0;i<4096;i+=4096/24){ctx.beginPath();ctx.moveTo(i,0);ctx.lineTo(i,2048);ctx.stroke();}for(let i=0;i<2048;i+=2048/12){ctx.beginPath();ctx.moveTo(0,i);ctx.lineTo(4096,i);ctx.stroke();}
- const texture=new THREE.CanvasTexture(canvas);texture.colorSpace=THREE.SRGBColorSpace;texture.anisotropy=renderer.capabilities.getMaxAnisotropy();
- const bumpMap=new THREE.CanvasTexture(bump);
- const lights=makeCanvas(2048,1024),lc=lights.getContext('2d');lc.fillStyle='black';lc.fillRect(0,0,2048,1024);
- const clusters=[[37.56,126.98,20],[35.18,129.08,10],[35.87,128.6,8],[36.35,127.38,6],[35.16,126.85,6],[37.26,127.03,8],[37.46,126.7,8],[35.68,139.69,20],[34.69,135.5,15],[31.23,121.47,20],[39.9,116.4,18],[22.3,114.17,14],[25.03,121.56,10],[1.35,103.8,8],[28.6,77.2,20],[48.85,2.35,14],[51.5,-.12,14],[40.71,-74,17],[34.05,-118.2,16],[-23.55,-46.6,15]];
- let seed=41;const rand=()=>{seed=(seed*16807)%2147483647;return(seed-1)/2147483646;};
- clusters.forEach(([lat,lon,n])=>{for(let i=0;i<n*4;i++){const x=(lon+180+(rand()-.5)*2.7)/360*2048,y=(90-lat+(rand()-.5)*1.5)/180*1024;const g=lc.createRadialGradient(x,y,0,x,y,2.5);g.addColorStop(0,'#ffd489');g.addColorStop(.35,'#bb7d2a');g.addColorStop(1,'#000000');lc.globalCompositeOperation='lighter';lc.fillStyle=g;lc.fillRect(x-3,y-3,6,6);}});
- const lightMap=new THREE.CanvasTexture(lights);lightMap.colorSpace=THREE.SRGBColorSpace;
- return {texture,bumpMap,lightMap};
-}
-const maps=paintMap();
-const globeMaterial=new THREE.MeshStandardMaterial({map:maps.texture,bumpMap:maps.bumpMap,bumpScale:.038,roughness:.96,metalness:0,emissive:0xffd39c,emissiveMap:maps.lightMap,emissiveIntensity:2.35});
-globe=new THREE.Mesh(new THREE.SphereGeometry(radius,144,96),globeMaterial);globeGroup.add(globe);
-// A fine, translucent shell gives the horizon a tactile, softly lit edge.
-const atmosphere=new THREE.Mesh(new THREE.SphereGeometry(2.018,96,64),new THREE.ShaderMaterial({transparent:true,side:THREE.BackSide,depthWrite:false,uniforms:{},vertexShader:'varying vec3 n; varying vec3 v; void main(){vec4 p=modelViewMatrix*vec4(position,1.);n=normalize(normalMatrix*normal);v=normalize(-p.xyz);gl_Position=projectionMatrix*p;}',fragmentShader:'varying vec3 n;varying vec3 v;void main(){float a=pow(1.-abs(dot(n,v)),3.);gl_FragColor=vec4(.84,.86,.68,a*.33);}'}));globeGroup.add(atmosphere);
-const ringMat=new THREE.LineBasicMaterial({color:0xb2b99a,transparent:true,opacity:.16});
-for(let j=0;j<2;j++){const pts=[];for(let i=0;i<=180;i++){const a=i/180*Math.PI*2;pts.push(new THREE.Vector3(Math.cos(a)*2.4,0,Math.sin(a)*2.4));}const ring=new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts),ringMat);ring.rotation.z=j?-.28:.23;ring.rotation.x=j?.32:0;globeGroup.add(ring);}
-const cloudMat=new THREE.MeshStandardMaterial({color:0xfff6dc,roughness:1,transparent:true,opacity:.82});
-const cloudGeo=new THREE.SphereGeometry(1,10,7);
-[[20,148],[49,145],[12,104],[49,95],[6,163],[-17,134],[59,178],[-15,95],[18,-153],[-30,-65],[45,-20],[1,30]].forEach(([lat,lon],i)=>{const g=new THREE.Group();g.position.copy(latLon(lat,lon,2.045));g.quaternion.setFromUnitVectors(new THREE.Vector3(0,1,0),g.position.clone().normalize());for(let j=0;j<4;j++){const c=new THREE.Mesh(cloudGeo,cloudMat);c.position.set((j-1.5)*.066,.01+Math.sin(j)*.012,Math.cos(j)*.02);c.scale.set(.065+(j%2)*.017,.025,.045);g.add(c);}globeGroup.add(g);});
-function label(text,sub,lat,lon,city,country=false){const el=document.createElement(city?'button':'div');el.className='map-label'+(country?' country':'');el.innerHTML=country?text:`<strong>${text}</strong>${sub?`<small>${sub}</small>`:''}<i class="pin ${sub==='Capital'?'capital':''}"></i>`;if(city){el.setAttribute('aria-label',`Explore ${text}`);el.onclick=()=>visit(places.find(p=>p.id===city));}$('#map-labels').appendChild(el);globeLabels.push({el,pos:latLon(lat,lon,2.045)});}
-label('Seoul 서울','Capital',37.5665,126.978,'jonggak');label('Busan 부산','By the sea',35.1796,129.0756,'haeundae');label('Tokyo','',35.68,139.69);label('Beijing','Capital',39.9,116.4);label('CHINA','',29,109,null,true);label('JAPAN','',41,142,null,true);label('MONGOLIA','',46,103,null,true);label('PHILIPPINES','',12,123,null,true);label('AUSTRALIA','',-25,134,null,true);
+const koreaCenter={lon:127.72,lat:36.08},KS=1.82;
+const koreaPoint=([lon,lat])=>new THREE.Vector2((lon-koreaCenter.lon)*Math.cos(36*Math.PI/180)*KS,-(lat-koreaCenter.lat)*KS);
+function shapeFrom(points){const shape=new THREE.Shape();points.forEach((p,i)=>i?shape.lineTo(p.x,-p.y):shape.moveTo(p.x,-p.y));shape.closePath();return shape;}
+function makeMesh(geometry,material,parent=koreaGroup){const m=new THREE.Mesh(keepGeo(geometry),material);m.castShadow=true;m.receiveShadow=true;parent.add(m);meshes.push(m);return m;}
+const mats={land:keepMat(new THREE.MeshStandardMaterial({color:0xa9bc8b,roughness:.9})),edge:keepMat(new THREE.MeshStandardMaterial({color:0xd7c08d,roughness:1})),mountain:keepMat(new THREE.MeshStandardMaterial({color:0x799a71,roughness:.96})),stone:keepMat(new THREE.MeshStandardMaterial({color:0xd8d2bc,roughness:.95})),gold:keepMat(new THREE.MeshStandardMaterial({color:0xffd078,emissive:0xa05a12,emissiveIntensity:.25}))};
+const world=await fetch('/data/world.geojson').then(r=>r.json());const kor=world.features.find(f=>f.properties.isoA3==='KOR');const ring=kor.geometry.coordinates[0].map(koreaPoint);const koreaShape=shapeFrom(ring);
+const countryBase=makeMesh(new THREE.ExtrudeGeometry(koreaShape,{depth:.26,bevelEnabled:true,bevelSize:.055,bevelThickness:.055,bevelSegments:2}),mats.edge);countryBase.rotation.x=-Math.PI/2;countryBase.position.y=-.06;
+const countryTop=makeMesh(new THREE.ExtrudeGeometry(koreaShape,{depth:.18,bevelEnabled:true,bevelSize:.025,bevelThickness:.025,bevelSegments:2}),mats.land);countryTop.rotation.x=-Math.PI/2;countryTop.position.y=.08;
+const jejuPos=koreaPoint([126.53,33.49]);const jeju=makeMesh(new THREE.CylinderGeometry(.36,.4,.18,16),mats.land);jeju.position.set(jejuPos.x,.1,jejuPos.y);jeju.scale.z=.5;jeju.rotation.y=-.3;
+const mountainPlaces=[[128.18,38.05,.25],[128.48,37.6,.32],[128.2,37.25,.25],[127.65,36.92,.28],[128.1,36.35,.33],[127.48,35.82,.28],[127.72,35.28,.25],[126.72,35.12,.18],[129.0,35.72,.22],[126.9,37.35,.16]];
+mountainPlaces.forEach(([lon,lat,s],i)=>{const p=koreaPoint([lon,lat]);const m=makeMesh(new THREE.ConeGeometry(s,s*(1.3+(i%3)*.25),7),mats.mountain);m.position.set(p.x,.24+s*.55,p.y);m.rotation.y=i*.9;});
+const cityMat=keepMat(new THREE.MeshStandardMaterial({color:0xe4d8b7,roughness:.85}));[[126.978,37.566,.12],[129.076,35.18,.105],[128.601,35.87,.09],[126.705,37.456,.07],[126.852,35.16,.07]].forEach(([lon,lat,s])=>{const p=koreaPoint([lon,lat]);for(let i=0;i<5;i++){const h=.12+(i%3)*.055,m=makeMesh(new THREE.BoxGeometry(s*.65,h,s*.65),cityMat);m.position.set(p.x+(i%2)*s*.68,.25+h/2,p.y+(Math.floor(i/2)-1)*s*.7);}});
+const cheolKorea=koreaPoint([126.8683,37.476]);const pinStem=makeMesh(new THREE.CylinderGeometry(.025,.025,.36,10),mats.gold);pinStem.position.set(cheolKorea.x,.52,cheolKorea.y);const pinHead=makeMesh(new THREE.SphereGeometry(.11,18,12),mats.gold);pinHead.position.set(cheolKorea.x,.76,cheolKorea.y);
+const koreaLabels=[{name:'철산',sub:'CHEOLSAN',pos:new THREE.Vector3(cheolKorea.x,.9,cheolKorea.y),kind:'main'},{name:'서울',sub:'SEOUL',pos:(()=>{const p=koreaPoint([126.978,37.566]);return new THREE.Vector3(p.x,.45,p.y)})()},{name:'부산',sub:'BUSAN',pos:(()=>{const p=koreaPoint([129.076,35.18]);return new THREE.Vector3(p.x,.4,p.y)})()},{name:'제주',sub:'JEJU',pos:new THREE.Vector3(jejuPos.x,.38,jejuPos.y)}];
 
-function offsetCamera(){if(innerWidth>800)camera.setViewOffset(innerWidth,innerHeight,-Math.min(145,innerWidth*.12),-8,innerWidth,innerHeight);else camera.setViewOffset(innerWidth,innerHeight,0,32,innerWidth,innerHeight);}
-function globeCamera(){const pixels=Math.min(innerWidth>800?(innerWidth-450)*.35:innerWidth*.39,Math.max(95,(innerHeight-(innerWidth>800?470:520))*.5));const distance=radius/Math.sin(Math.atan(pixels/(innerHeight*.5)*Math.tan(THREE.MathUtils.degToRad(camera.fov*.5))));return latLon(28,128,distance);}
-camera.position.copy(globeCamera());controls.target.set(0,0,0);offsetCamera();controls.update();
-function flyTo(position,target,duration=1300){transition={from:camera.position.clone(),to:position.clone(),fromTarget:controls.target.clone(),toTarget:target.clone(),start:performance.now(),duration};controls.enabled=false;}
+function roundedShape(w,h,r){const s=new THREE.Shape();s.moveTo(-w/2+r,-h/2);s.lineTo(w/2-r,-h/2);s.quadraticCurveTo(w/2,-h/2,w/2,-h/2+r);s.lineTo(w/2,h/2-r);s.quadraticCurveTo(w/2,h/2,w/2-r,h/2);s.lineTo(-w/2+r,h/2);s.quadraticCurveTo(-w/2,h/2,-w/2,h/2-r);s.lineTo(-w/2,-h/2+r);s.quadraticCurveTo(-w/2,-h/2,-w/2+r,-h/2);return s;}
+const corridorCenter={lon:126.8754,lat:37.4785},DS=.0035;
+const local=([lon,lat])=>new THREE.Vector2((lon-corridorCenter.lon)*111320*Math.cos(corridorCenter.lat*Math.PI/180)*DS,-(lat-corridorCenter.lat)*111320*DS);
+function surface(points,material,y=.12,parent=detailGroup){const s=shapeFrom(points),m=makeMesh(new THREE.ShapeGeometry(s),material,parent);m.rotation.x=-Math.PI/2;m.position.y=y;return m;}
+function ribbon(points,width,material,y=.14,parent=detailGroup){const verts=[],idx=[];for(let i=0;i<points.length;i++){const a=points[Math.max(0,i-1)],b=points[Math.min(points.length-1,i+1)],d=b.clone().sub(a).normalize(),n=new THREE.Vector2(-d.y,d.x).multiplyScalar(width/2);verts.push(points[i].x+n.x,y,points[i].y+n.y,points[i].x-n.x,y,points[i].y-n.y);if(i<points.length-1){const k=i*2;idx.push(k,k+1,k+2,k+1,k+3,k+2);}}const g=new THREE.BufferGeometry();g.setAttribute('position',new THREE.Float32BufferAttribute(verts,3));g.setIndex(idx);g.computeVertexNormals();return makeMesh(g,material,parent);}
+const detailMaterials={base:keepMat(new THREE.MeshStandardMaterial({color:0xb99f78,roughness:1})),west:keepMat(new THREE.MeshStandardMaterial({color:0xd9cfb4,roughness:.97})),east:keepMat(new THREE.MeshStandardMaterial({color:0xc9d0c8,roughness:.95})),park:keepMat(new THREE.MeshStandardMaterial({color:0x759b69,roughness:1})),park2:keepMat(new THREE.MeshStandardMaterial({color:0x90ad78,roughness:1})),bank:keepMat(new THREE.MeshStandardMaterial({color:0x86aa79,roughness:1})),river:keepMat(new THREE.MeshPhysicalMaterial({color:0x58bec8,roughness:.1,metalness:.12,clearcoat:1,clearcoatRoughness:.1,emissive:0x14545b,emissiveIntensity:.28})),road:keepMat(new THREE.MeshStandardMaterial({color:0x747e7d,roughness:.92})),roadLight:keepMat(new THREE.MeshStandardMaterial({color:0xa4aaa3,roughness:.95})),line:keepMat(new THREE.MeshStandardMaterial({color:0xeee5c7,roughness:.8})),tree:keepMat(new THREE.MeshStandardMaterial({color:0x608860,roughness:1})),tree2:keepMat(new THREE.MeshStandardMaterial({color:0x86a66e,roughness:1})),trunk:keepMat(new THREE.MeshStandardMaterial({color:0x856b4a,roughness:1}))};
+let detailLabels=[];
+async function buildDetail(){if(detailBuilt)return;detailBuilt=true;const [west,east]=await Promise.all([fetch('/data/cheolsan.json').then(r=>r.json()),fetch('/data/gasan.json').then(r=>r.json())]);
+ const tile=makeMesh(new THREE.ExtrudeGeometry(roundedShape(10.2,7.1,.38),{depth:.28,bevelEnabled:true,bevelSize:.08,bevelThickness:.05,bevelSegments:3}),detailMaterials.base,detailGroup);tile.rotation.x=-Math.PI/2;tile.position.y=-.18;
+ surface([new THREE.Vector2(-5,-3.5),new THREE.Vector2(.05,-3.5),new THREE.Vector2(.05,3.5),new THREE.Vector2(-5,3.5)],detailMaterials.west,.11);
+ surface([new THREE.Vector2(.05,-3.5),new THREE.Vector2(5,-3.5),new THREE.Vector2(5,3.5),new THREE.Vector2(.05,3.5)],detailMaterials.east,.112);
+ surface([new THREE.Vector2(-5,-3.5),new THREE.Vector2(-.15,-3.5),new THREE.Vector2(-.65,-1.0),new THREE.Vector2(-2.2,-.45),new THREE.Vector2(-3.0,.2),new THREE.Vector2(-5,.7)],detailMaterials.park,.125);
+ surface([new THREE.Vector2(-5,-3.5),new THREE.Vector2(-1.3,-3.5),new THREE.Vector2(-1.65,-1.45),new THREE.Vector2(-3.3,-.8),new THREE.Vector2(-5,-.55)],detailMaterials.park2,.132);
+ const riverGeo=[[126.87555,37.4872],[126.87578,37.4845],[126.87603,37.4816],[126.87648,37.4788],[126.87715,37.4761],[126.87815,37.4732],[126.87925,37.4698]].map(local);
+ ribbon(riverGeo,.82,detailMaterials.bank,.145);ribbon(riverGeo,.48,detailMaterials.river,.166);
+ const combinedBuildings=[...west.buildings,...east.buildings],combinedRoads=[...west.roads,...east.roads],seenB=new Set(),seenR=new Set();
+ const roadSegments=[];combinedRoads.forEach(r=>{if(seenR.has(r.osmId))return;seenR.add(r.osmId);const pts=r.points.map(local);const major=['primary','secondary','tertiary'].includes(r.type),walk=['path','footway','cycleway','pedestrian','steps'].includes(r.type);const width=major ? .10 : walk ? .025 : .05;for(let i=1;i<pts.length;i++){const a=pts[i-1],b=pts[i];if(Math.max(Math.abs(a.x),Math.abs(b.x))>5.2||Math.max(Math.abs(a.y),Math.abs(b.y))>3.7)continue;ribbon([a,b],width+(walk?0:.025),walk?detailMaterials.roadLight:detailMaterials.road,.18);roadSegments.push({a,b});}});
+ combinedBuildings.forEach((b,i)=>{if(seenB.has(b.osmId))return;seenB.add(b.osmId);let pts=b.points.map(local);if(pts.length>2&&pts[0].distanceTo(pts[pts.length-1])<.001)pts.pop();if(pts.length<3)return;const c=pts.reduce((s,p)=>s.add(p),new THREE.Vector2()).multiplyScalar(1/pts.length);if(Math.abs(c.x)>4.9||Math.abs(c.y)>3.35)return;const nearRiver=Math.abs(c.x-local([126.8766,corridorCenter.lat]).x)<.22;if(nearRiver)return;const h=THREE.MathUtils.clamp(b.height*.0048,.07,.82),shape=shapeFrom(pts),palette=c.x>.1?[0xd7d4c7,0xc6c8c0,0xe0d7c3,0xb9c2bb]:[0xd8c8aa,0xc8b695,0xe2d6bd,0xb8b99f];const bm=keepMat(new THREE.MeshStandardMaterial({color:palette[i%palette.length],roughness:.9}));const m=makeMesh(new THREE.ExtrudeGeometry(shape,{depth:h,bevelEnabled:false}),bm,detailGroup);m.rotation.x=-Math.PI/2;m.position.y=.18;if(h>.25&&i%4===0){const roof=makeMesh(new THREE.BoxGeometry(.055,.04,.055),detailMaterials.roadLight,detailGroup);roof.position.set(c.x,.2+h+.02,c.y);}});
+ // Park and riverside trees, kept clear of the main channel.
+ let seed=83;const rand=()=>{seed=(seed*16807)%2147483647;return(seed-1)/2147483646;};const trunkGeo=keepGeo(new THREE.CylinderGeometry(.013,.017,.13,6)),crownGeo=keepGeo(new THREE.IcosahedronGeometry(.075,1));for(let i=0;i<150;i++){let x,z;if(i<90){x=-4.8+rand()*3.8;z=-3.25+rand()*3.6;}else{const p=riverGeo[Math.floor(rand()*(riverGeo.length-1))].clone().lerp(riverGeo[Math.min(riverGeo.length-1,1+Math.floor(rand()*(riverGeo.length-1)))],rand());x=p.x+(rand()>.5 ? .38 : -.38);z=p.y;}if(Math.abs(x)>4.85||Math.abs(z)>3.3)continue;const tr=makeMesh(trunkGeo,detailMaterials.trunk,detailGroup);tr.position.set(x,.255,z);const cr=makeMesh(crownGeo,i%3?detailMaterials.tree:detailMaterials.tree2,detailGroup);cr.position.set(x,.36,z);cr.scale.set(.75+rand()*.7,.85+rand()*.6,.75+rand()*.7);}
+ // Soft water glints that drift downstream.
+ const glintMat=keepMat(new THREE.LineBasicMaterial({color:0xd7ffff,transparent:true,opacity:.48}));for(let i=0;i<9;i++){const base=riverGeo[Math.min(riverGeo.length-2,Math.floor(i/2))].clone().lerp(riverGeo[Math.min(riverGeo.length-1,1+Math.floor(i/2))],(i%2)*.45+.2);const line=new THREE.Line(keepGeo(new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(base.x-.08,.17,base.y),new THREE.Vector3(base.x+.08,.17,base.y+.02)])),glintMat);line.userData.phase=i*.7;detailGroup.add(line);}
+ const labelPoint=(coord,y=.75)=>{const p=local(coord);return new THREE.Vector3(p.x,y,p.y)};detailLabels=[{name:'철산동',sub:'CHEOLSAN-DONG',pos:labelPoint([126.8695,37.4801],.68)},{name:'안양천',sub:'ANYANGCHEON',pos:labelPoint([126.8764,37.4793],.5),kind:'river-label'},{name:'가산디지털단지',sub:'GASAN DIGITAL',pos:labelPoint([126.883,37.4805],.82)},{name:'도덕산',sub:'DODEOKSAN',pos:labelPoint([126.8662,37.4728],.6)},{name:'철산교',sub:'BRIDGE',pos:labelPoint([126.8762,37.4819],.42)}];
+}
 
-export function solarDirection(date){
- const start=Date.UTC(date.getUTCFullYear(),0,0),day=(date.getTime()-start)/86400000;
- const hour=date.getUTCHours()+date.getUTCMinutes()/60+date.getUTCSeconds()/3600;
- const g=2*Math.PI/365*(Math.floor(day)-1+(hour-12)/24);
- const eq=229.18*(.000075+.001868*Math.cos(g)-.032077*Math.sin(g)-.014615*Math.cos(2*g)-.040849*Math.sin(2*g));
- const decl=.006918-.399912*Math.cos(g)+.070257*Math.sin(g)-.006758*Math.cos(2*g)+.000907*Math.sin(2*g)-.002697*Math.cos(3*g)+.00148*Math.sin(3*g);
- return latLon(THREE.MathUtils.radToDeg(decl),(720-hour*60-eq)/4,1);
-}
-function shownDate(){return new Date();}
-let currentDay=0;
-function updateTime(){const d=shownDate(),kst=new Date(d.getTime()+9*3600000);minute=kst.getUTCHours()*60+kst.getUTCMinutes();$('#local-time').textContent=`${String(kst.getUTCHours()).padStart(2,'0')}:${String(kst.getUTCMinutes()).padStart(2,'0')}`;document.documentElement.style.setProperty('--korea-day-progress',`${minute/1439*100}%`);
- const dir=solarDirection(d);nightUniform.value.copy(dir);const altitude=THREE.MathUtils.radToDeg(Math.asin(THREE.MathUtils.clamp(dir.dot(latLon(selected.lat,selected.lon,1)),-1,1)));currentDay=THREE.MathUtils.smoothstep(altitude,-8,20);
- const daylight=altitude>0,twilight=altitude>-8&&altitude<=8;
- $('#light-label').textContent=twilight?'Golden edges of the day':daylight?'Daylight in Korea':'Quiet hours in Korea';
- $('#time-icon').innerHTML=svg(daylight?'sun':'moon');$('#time-heading').textContent='Korea, right now';
- $('#date-label').textContent=`${new Intl.DateTimeFormat('en',{month:'short',day:'numeric',timeZone:'Asia/Seoul'}).format(d).toUpperCase()} · KST (UTC+9)`;
- $('#time-mood').textContent=twilight?'The whole world feels a little softer.':daylight?'A little sunshine for your wandering.':'Windows glow. The world slows down.';
- document.body.classList.toggle('night',!daylight);
- if(mode==='globe'){sun.castShadow=false;sun.position.copy(dir).multiplyScalar(12);sun.intensity=3.8;ambient.intensity=.65;fill.intensity=.12;renderer.toneMappingExposure=1.28;}
- else{sun.castShadow=currentDay>.18;const east=latLon(selected.lat,selected.lon+.01,1).sub(latLon(selected.lat,selected.lon,1)).normalize();const north=latLon(selected.lat+.01,selected.lon,1).sub(latLon(selected.lat,selected.lon,1)).normalize();sun.position.set(dir.dot(east)*12,Math.max(.9,dir.dot(latLon(selected.lat,selected.lon,1))*12),-dir.dot(north)*12);sun.intensity=.28+currentDay*4.2;ambient.intensity=.28+currentDay*.5;fill.intensity=.08+currentDay*.1;renderer.toneMappingExposure=1.08;cityBuilder?.setDaylight(currentDay);}
-}
-updateTime();
-
-async function visit(place){
- selected=place;mode='city';document.body.classList.add('city');globeGroup.visible=false;cityGroup.visible=true;$('#globe-btn').classList.remove('active');$('#city-btn').classList.add('active');
- document.querySelectorAll('.destination').forEach(el=>{el.classList.toggle('selected',el.dataset.id===place.id);el.setAttribute('aria-pressed',String(el.dataset.id===place.id));});
- $('#scene-eyebrow').textContent=`${place.region.toUpperCase()} · ${place.ko}`;$('#scene-title').textContent=place.title;$('#scene-description').textContent=place.description;
- $('#coordinate-text').textContent=`${place.lat.toFixed(4)}° N  ·  ${place.lon.toFixed(4)}° E`;$('#map-scale').textContent='REAL MAP FOOTPRINTS · MINIATURE BUILDINGS';
- controls.minDistance=4;controls.maxDistance=30;controls.maxPolarAngle=Math.PI*.47;controls.minPolarAngle=.12;controls.autoRotate=false;$('#rotate-btn').classList.remove('active');
- const request=++cityRequest;$('#collect-star').hidden=true;
- try{
- if(!cityCache.has(place.id)){const response=await fetch(`/data/${place.id}.json`);if(!response.ok)throw Error('The neighborhood could not load');cityCache.set(place.id,await response.json());}
- const {buildCity}=await import('./city.js');if(request!==cityRequest||mode!=='city')return;
- if(cityBuilder){cityGroup.remove(cityBuilder.group);cityBuilder.dispose();}
- cityBuilder=buildCity(THREE,place,cityCache.get(place.id));cityGroup.add(cityBuilder.group);starPosition.copy(cityBuilder.starPosition);
- camera.position.set(12,12,16);controls.target.set(0,0,0);flyTo(cityCamera(),new THREE.Vector3(0,.3,0),1100);
- $('#collect-star').hidden=stamps.has(place.id);updateTime();
- }catch(error){console.error(error);toast('This little place couldn’t load. Please try again.');showGlobe();}
-}
-function cityCamera(){return innerWidth>800?new THREE.Vector3(12,13,16):new THREE.Vector3(16,19,22);}
-function showGlobe(){mode='globe';cityRequest++;document.body.classList.remove('city');globeGroup.visible=true;cityGroup.visible=false;$('#collect-star').hidden=true;$('#globe-btn').classList.add('active');$('#city-btn').classList.remove('active');$('#scene-eyebrow').textContent='OUR LITTLE BLUE PLANET';$('#scene-title').textContent='A world of possibilities.';$('#scene-description').textContent='Drag to wander. Pick a place to get closer.';$('#map-scale').textContent='EARTH · 1 : A LITTLE WONDER';controls.minDistance=3.1;controls.maxDistance=36;controls.maxPolarAngle=Math.PI;controls.minPolarAngle=0;controls.autoRotate=false;$('#rotate-btn').classList.remove('active');flyTo(globeCamera(),new THREE.Vector3(),1300);updateTime();}
-document.querySelectorAll('.destination').forEach(el=>el.onclick=()=>visit(places.find(p=>p.id===el.dataset.id)));
-$('#city-btn').onclick=()=>visit(selected);$('#globe-btn').onclick=showGlobe;
-function zoom(factor){const p=camera.position.clone().sub(controls.target);p.setLength(THREE.MathUtils.clamp(p.length()*factor,controls.minDistance,controls.maxDistance));flyTo(p.add(controls.target),controls.target,300);}
-$('#zoom-in').onclick=()=>zoom(.78);$('#zoom-out').onclick=()=>zoom(1.28);$('#reset-view').onclick=()=>mode==='globe'?showGlobe():flyTo(cityCamera(),new THREE.Vector3(0,.3,0),900);
-$('#rotate-btn').onclick=()=>{controls.autoRotate=!controls.autoRotate;$('#rotate-btn').classList.toggle('active',controls.autoRotate);$('#rotate-btn').setAttribute('aria-pressed',String(controls.autoRotate));$('#rotate-btn').setAttribute('aria-label',`${controls.autoRotate?'Stop':'Start'} auto rotation`);};
-$('#collect-star').onclick=()=>{if(mode!=='city'||stamps.has(selected.id))return;stamps.add(selected.id);try{localStorage.setItem('sogeum-stamps',JSON.stringify([...stamps]));}catch{}updatePassport();$('#collect-star').hidden=true;toast(stamps.size===6?'✦ All six stars! Korea is a little more yours.':`✦ A little piece of ${selected.name}, collected.`);playChime();};
-function showDialog(html){$('#dialog-content').innerHTML=html;$('#info-dialog').showModal();}
-$('#help-btn').onclick=()=>showDialog(`<div class="eyebrow">WELCOME, LITTLE WANDERER</div><h2>Make yourself a little world.</h2><p>Spin the globe, drop into Korea, and take your time.</p><div class="help-row"><span>${svg('mouse')}</span><span>Drag to look around. Scroll or pinch to zoom.</span></div><div class="help-row"><span>${svg('buildings')}</span><span>Choose a neighborhood to explore its real map in miniature.</span></div><div class="help-row"><span>✦</span><span>Find the floating golden star. Collect all six for your passport.</span></div><div class="help-row"><span>${svg('sun')}</span><span>The sun, shadows, and glowing windows follow the live time in Korea.</span></div><p><kbd>+</kbd> / <kbd>−</kbd> zoom · <kbd>G</kbd> globe · <kbd>R</kbd> rotate · <kbd>Esc</kbd> close</p>`);
-$('#passport-btn').onclick=()=>showDialog(`<div class="eyebrow">A PASSPORT FULL OF LITTLE MOMENTS</div><h2>Your little journey <span style="color:#a2ab83">${stamps.size}/6</span></h2><p>Find and tap the golden star in each neighborhood. Your stamps stay on this device.</p><div class="passport-grid">${places.map(p=>`<div class="stamp ${stamps.has(p.id)?'collected':''}"><b>${stamps.has(p.id)?'✦':'✧'}</b><span>${p.name}</span><small>${p.ko}</small></div>`).join('')}</div>`);
-$('#credits-btn').onclick=()=>showDialog(`<div class="eyebrow">REAL PLACES. A LITTLE IMAGINATION.</div><h2>About this little world.</h2><p>Sogeum (소금) means salt. Just a little makes the everyday more interesting.</p><p>Neighborhood streets and building footprints are based on <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noreferrer">© OpenStreetMap contributors</a> (ODbL), captured September 2026. Coastlines and country boundaries use public-domain <a href="https://www.naturalearthdata.com/about/terms-of-use/" target="_blank" rel="noreferrer">Natural Earth</a> data.</p><p>This is a stylized miniature, not a navigation map or an exact 3D survey. Heights use map tags where available and illustrative estimates elsewhere. Landmark details, trees, cars, and window lights are artistic.</p><p>Live light follows the date and sun position using the <a href="https://gml.noaa.gov/grad/solcalc/solareqns.PDF" target="_blank" rel="noreferrer">NOAA solar equations</a>. The time slider uses today’s date in Korea (UTC+9). Weather and cloud shapes are decorative.</p><p>Rendered with <a href="https://threejs.org/" target="_blank" rel="noreferrer">Three.js</a>.</p>`);
-$('.dialog-close').onclick=()=>$('#info-dialog').close();$('#info-dialog').addEventListener('click',e=>{if(e.target===$('#info-dialog')){const r=e.target.getBoundingClientRect();if(e.clientX<r.left||e.clientX>r.right||e.clientY<r.top||e.clientY>r.bottom)e.target.close();}});
-let audioContext,ambientGain;
-function playChime(){if(!soundEnabled)return;[523.25,659.25,783.99].forEach((hz,i)=>{const osc=audioContext.createOscillator(),gain=audioContext.createGain();osc.type='sine';osc.frequency.value=hz;gain.gain.setValueAtTime(0,audioContext.currentTime+i*.12);gain.gain.linearRampToValueAtTime(.1,audioContext.currentTime+i*.12+.03);gain.gain.exponentialRampToValueAtTime(.0001,audioContext.currentTime+i*.12+1);osc.connect(gain);gain.connect(audioContext.destination);osc.start(audioContext.currentTime+i*.12);osc.stop(audioContext.currentTime+i*.12+1);});}
-$('#sound-btn').onclick=async()=>{if(!audioContext){audioContext=new AudioContext();ambientGain=audioContext.createGain();ambientGain.gain.value=0;ambientGain.connect(audioContext.destination);[130.81,196,261.63].forEach((freq,i)=>{const osc=audioContext.createOscillator(),g=audioContext.createGain();osc.type='sine';osc.frequency.value=freq;g.gain.value=.018/(i+1);osc.connect(g);g.connect(ambientGain);osc.start();});}await audioContext.resume();soundEnabled=!soundEnabled;ambientGain.gain.setTargetAtTime(soundEnabled?1:0,audioContext.currentTime,.7);$('#sound-btn').classList.toggle('active',soundEnabled);$('#sound-btn').setAttribute('aria-label',`Turn ${soundEnabled?'off':'on'} ambient sound`);$('#sound-btn').setAttribute('aria-pressed',String(soundEnabled));if(soundEnabled)playChime();};
-document.addEventListener('keydown',e=>{if(e.target.matches('input,textarea')||$('#info-dialog').open)return;if(e.key==='+'||e.key==='=')zoom(.8);if(e.key==='-')zoom(1.25);if(e.key.toLowerCase()==='g')showGlobe();if(e.key.toLowerCase()==='r')$('#rotate-btn').click();});
-const reducedMotion=matchMedia('(prefers-reduced-motion: reduce)').matches;
-const projection=new THREE.Vector3();
-function project(v){projection.copy(v).project(camera);return{x:(projection.x*.5+.5)*innerWidth,y:(-.5*projection.y+.5)*innerHeight,z:projection.z};}
-function animate(now){requestAnimationFrame(animate);frame++;
- if(transition){const t=Math.min(1,(now-transition.start)/(reducedMotion?1:transition.duration)),ease=t<.5?4*t*t*t:1-Math.pow(-2*t+2,3)/2;camera.position.lerpVectors(transition.from,transition.to,ease);controls.target.lerpVectors(transition.fromTarget,transition.toTarget,ease);if(t===1){transition=null;controls.enabled=true;}}
- controls.update();
- if(frame%1800===0)updateTime();
- globeLabels.forEach(({el,pos})=>{if(mode!=='globe'){el.style.display='none';return;}const p=project(pos);const facing=pos.clone().normalize().dot(camera.position.clone().sub(pos).normalize());const visible=facing>.18&&p.z<1;el.style.display=visible?'flex':'none';if(visible){el.style.left=`${p.x}px`;el.style.top=`${p.y}px`;el.style.opacity=Math.min(1,(facing-.18)*4);}});
- if(mode==='city'&&cityBuilder){cityBuilder.animate(reducedMotion?0:now*.001);if(!stamps.has(selected.id)) {const p=project(starPosition.clone().add(new THREE.Vector3(0,Math.sin(now*.002)*.06,0)));$('#collect-star').style.left=`${p.x}px`;$('#collect-star').style.top=`${p.y-$('.topbar').getBoundingClientRect().height}px`;$('#collect-star').hidden=p.z>1;}}
- renderer.render(scene,camera);
-}
-controls.maxDistance=36;
+function setLabels(items){$('#labels').innerHTML='';items.forEach(item=>{const el=document.createElement('div');el.className=`map-label ${item.kind||''}`;el.innerHTML=`<strong>${item.name}</strong><small>${item.sub}</small><i></i>`;$('#labels').appendChild(el);item.el=el;});}
+const koreaCam=new THREE.Vector3(6.8,9.4,8.6),koreaTarget=new THREE.Vector3(.15,.25,.25),detailCam=new THREE.Vector3(8.7,8.5,9.5),detailTarget=new THREE.Vector3(0,.12,0);
+function updateOffset(){if(innerWidth>800)camera.setViewOffset(innerWidth,innerHeight,-125,0,innerWidth,innerHeight);else camera.clearViewOffset();}
+function fly(to,target,duration=1050){transition={from:camera.position.clone(),to:to.clone(),fromTarget:controls.target.clone(),target:target.clone(),start:performance.now(),duration};controls.enabled=false;}
+function showKorea(){mode='korea';document.body.classList.remove('detail');koreaGroup.visible=true;detailGroup.visible=false;$('#enter-place').hidden=false;$('#back-korea').hidden=true;$('#map-key').hidden=true;$('#eyebrow').textContent='A LITTLE MAP OF KOREA';$('#title').innerHTML='대한민국,<br>조금 더 가까이.';$('#lede').innerHTML='바다 위에 떠 있는 우리 동네.<br>철산에서 안양천까지 천천히 내려다보세요.';setLabels(koreaLabels);controls.minDistance=5.6;controls.maxDistance=22;controls.maxPolarAngle=1.35;zoomLock=true;fly(koreaCam,koreaTarget);setTimeout(()=>zoomLock=false,1200);}
+async function showDetail(){if(mode==='detail')return;await buildDetail();mode='detail';document.body.classList.add('detail');koreaGroup.visible=false;detailGroup.visible=true;$('#enter-place').hidden=true;$('#back-korea').hidden=false;$('#map-key').hidden=false;$('#eyebrow').textContent='CHEOLSAN · ANYANGCHEON · GASAN';$('#title').innerHTML='철산과 가산 사이,<br>안양천.';$('#lede').innerHTML='도덕산의 초록과 디지털단지의 빌딩 사이로<br>물이 흐르는 진짜 동네의 모양.';setLabels(detailLabels);controls.minDistance=4.5;controls.maxDistance=24;controls.maxPolarAngle=1.28;fly(detailCam,detailTarget,1200);}
+$('#enter-place').onclick=showDetail;$('#back-korea').onclick=showKorea;$('#reset').onclick=()=>mode==='korea'?fly(koreaCam,koreaTarget,700):fly(detailCam,detailTarget,700);
+controls.addEventListener('change',()=>{if(mode==='korea'&&!zoomLock&&camera.position.distanceTo(controls.target)<6.25)showDetail();});
+function updateTime(){const now=new Date(),kst=new Date(now.getTime()+9*3600000);minute=kst.getUTCHours()*60+kst.getUTCMinutes();$('#clock').textContent=`${String(kst.getUTCHours()).padStart(2,'0')}:${String(kst.getUTCMinutes()).padStart(2,'0')}`;const hour=kst.getUTCHours(),theta=(minute/60-6)/12*Math.PI;daylight=Math.max(0,Math.sin(theta));const labels=hour<5?'깊은 밤':hour<8?'아침빛':hour<12?'맑은 오전':hour<17?'햇살 좋은 오후':hour<20?'노을빛': '고요한 밤';$('#period').textContent=labels;sun.position.set(Math.cos(theta)*12,Math.max(.6,Math.sin(theta)*14),6);sun.intensity=.32+daylight*4.2;hemi.intensity=.52+daylight*.45;fill.intensity=.12+daylight*.16;renderer.toneMappingExposure=.96+daylight*.2;seaUniforms.uDay.value=.18+daylight*.82;seaUniforms.uSunX.value=.5+Math.cos(theta)*.26;document.body.classList.toggle('night',daylight<.08);}
+updateTime();setInterval(updateTime,30000);
+camera.position.copy(koreaCam);controls.target.copy(koreaTarget);updateOffset();controls.minDistance=5.6;controls.maxDistance=22;controls.update();setLabels(koreaLabels);
+const projected=new THREE.Vector3();let frame=0;
+function animate(now){requestAnimationFrame(animate);seaUniforms.uTime.value=now*.001;if(transition){const t=Math.min(1,(now-transition.start)/transition.duration),e=1-Math.pow(1-t,4);camera.position.lerpVectors(transition.from,transition.to,e);controls.target.lerpVectors(transition.fromTarget,transition.target,e);if(t===1){transition=null;controls.enabled=true;}}controls.update();const labels=mode==='korea'?koreaLabels:detailLabels;labels.forEach(item=>{projected.copy(item.pos).project(camera);const visible=projected.z<1;item.el.style.display=visible?'flex':'none';if(visible){item.el.style.left=`${(projected.x*.5+.5)*innerWidth}px`;item.el.style.top=`${(-projected.y*.5+.5)*innerHeight}px`;}});if(mode==='detail'&&frame++%2===0){detailGroup.children.forEach(o=>{if(o.isLine&&o.userData.phase!==undefined)o.material.opacity=.28+.25*Math.sin(now*.002+o.userData.phase);});}renderer.render(scene,camera);}
 requestAnimationFrame(animate);$('#loading').classList.add('hidden');$('#loading').setAttribute('aria-hidden','true');
-window.addEventListener('resize',()=>{renderer.setSize(innerWidth,innerHeight);camera.aspect=innerWidth/innerHeight;offsetCamera();camera.updateProjectionMatrix();});
-window.addEventListener('error',()=>{if(!$('#loading').classList.contains('hidden')){$('#loading strong').textContent='This little world needs WebGL. Please refresh or try another browser.';}});
-window.sogeum={getState:()=>({view:mode,place:selected.id,live:true,minute,stars:[...stamps],daylight:currentDay}),visit:id=>{const p=places.find(p=>p.id===id);if(!p)throw Error('Unknown neighborhood');return visit(p);},globe:showGlobe};
-if(document.modelContext?.registerTool){
- const lifecycle=new AbortController();
- const tools=[
- {name:'read_korea_explorer',title:'Read explorer state',description:'Read the current globe or neighborhood, Korea time, and locally collected stars.',inputSchema:{type:'object',properties:{},additionalProperties:false},annotations:{readOnlyHint:true,untrustedContentHint:false},execute:()=>window.sogeum.getState()},
- {name:'explore_korea_place',title:'Explore a Korean neighborhood',description:'Navigate the visible 3D explorer to a neighborhood or the globe. Does not collect a star.',inputSchema:{type:'object',properties:{place:{type:'string',enum:['globe',...places.map(p=>p.id)]}},required:['place'],additionalProperties:false},annotations:{readOnlyHint:false,untrustedContentHint:false},execute:async input=>{if(!input||typeof input.place!=='string')throw Error('A place is required');if(input.place==='globe')showGlobe();else await window.sogeum.visit(input.place);return window.sogeum.getState();}},
- ];
- for(const tool of tools){try{Promise.resolve(document.modelContext.registerTool(tool,{signal:lifecycle.signal})).catch(()=>{});}catch{}}
- window.addEventListener('pagehide',()=>lifecycle.abort(),{once:true});
-}
+window.addEventListener('resize',()=>{camera.aspect=innerWidth/innerHeight;updateOffset();camera.updateProjectionMatrix();renderer.setSize(innerWidth,innerHeight);});
+window.sogeum={showKorea,showCheolsan:showDetail,getState:()=>({view:mode,koreaTime:$('#clock').textContent,daylight})};
+if(document.modelContext?.registerTool){const lifecycle=new AbortController();for(const tool of [{name:'read_korea_map',title:'Read Korea map state',description:'Read whether the 3D map is showing Korea or the Cheolsan–Anyangcheon corridor.',inputSchema:{type:'object',properties:{},additionalProperties:false},annotations:{readOnlyHint:true,untrustedContentHint:false},execute:()=>window.sogeum.getState()},{name:'open_cheolsan_map',title:'Open Cheolsan and Anyangcheon',description:'Zoom the visible 3D map into the Cheolsan–Anyangcheon–Gasan Digital corridor.',inputSchema:{type:'object',properties:{},additionalProperties:false},annotations:{readOnlyHint:false,untrustedContentHint:false},execute:async()=>{await showDetail();return window.sogeum.getState();}}]){try{Promise.resolve(document.modelContext.registerTool(tool,{signal:lifecycle.signal})).catch(()=>{});}catch{}}window.addEventListener('pagehide',()=>lifecycle.abort(),{once:true});}
