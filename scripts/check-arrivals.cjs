@@ -1,0 +1,11 @@
+const assert=require('node:assert/strict');
+const {normalizeArrivals}=require('../lib/arrivals.cjs');
+const now=Date.parse('2026-09-13T14:00:00Z');
+const row={subwayId:'1007',statnNm:'철산',recptnDt:'2026-09-13 22:59:30',barvlDt:'180',updnLine:'상행',bstatnNm:'장암',btrainNo:'7011',ordkey:'01001',arvlCd:'99',arvlMsg2:'3분 후'};
+let out=normalizeArrivals({realtimeArrivalList:[row,row]},now);assert.equal(out.length,1);assert.equal(Date.parse(out[0].arrivalAt)-now,150000);
+assert.equal(normalizeArrivals({realtimeArrivalList:[{...row,statnNm:'가산디지털단지'}]},now).length,0);
+assert.equal(normalizeArrivals({realtimeArrivalList:[{...row,recptnDt:'2026-09-13 22:50:00'}]},now).length,0);
+assert.equal(normalizeArrivals({realtimeArrivalList:[{...row,recptnDt:'invalid'}]},now).length,0);
+assert.equal(normalizeArrivals({realtimeArrivalList:[{...row,barvlDt:'0'}]},now)[0].arrivalAt,null);
+assert.equal(normalizeArrivals({realtimeArrivalList:[{...row,barvlDt:'1'}]},now).length,0);
+console.log('Arrival validation passed: correct station/line, reception-time correction, stale-data rejection, deduplication, no fabricated countdown.');

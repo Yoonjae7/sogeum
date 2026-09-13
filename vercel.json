@@ -2,6 +2,6 @@
   "version": 2,
   "rewrites": [
     { "source": "/", "destination": "/dist/index.html" },
-    { "source": "/(.*)", "destination": "/dist/$1" }
+    { "source": "/((?!api/).*)", "destination": "/dist/$1" }
   ]
 }

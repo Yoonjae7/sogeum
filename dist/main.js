@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { SCALE, project, polygon, flatGeometry, stripGeometry, combine, inside, segmentDistance, sunDirection } from './geo.js';
 import { waterMaterial } from './water.js?v=9';
+import { setupTransit } from './transit.js?v=13';
 
 const $=s=>document.querySelector(s), reduced=matchMedia('(prefers-reduced-motion: reduce)').matches;
 const clamp=THREE.MathUtils.clamp;
@@ -35,6 +36,8 @@ let seed=9247;function random(){seed=(seed*16807)%2147483647;return(seed-1)/2147
 const dummy=new THREE.Object3D();
 let mode='detail',animation=null,autoTour=false,labels=[],riverLine=[],features=[],traffic=[],trafficBody,trafficRoof,trainBody,trainPath;
 const nightLights=new THREE.Group();detail.add(nightLights);
+const subwayLayer=new THREE.Group();detail.add(subwayLayer);subwayLayer.visible=false;
+let landmarks,subwayTrains=[],transitUI;
 let riverPolygons=[],parkPolygons=[],buildingPolygons=[],roadPaths=[];
 const localBounds=[project([126.858,37.492]),project([126.892,37.469])];
 const within=p=>p.x>localBounds[0].x&&p.x<localBounds[1].x&&p.y>localBounds[0].y&&p.y<localBounds[1].y;
@@ -68,7 +71,7 @@ function buildBuilding(f,index){
   generateSideWallUV:(g,v,a,b,c,d)=>{const len=Math.hypot(v[a*3]-v[b*3],v[a*3+1]-v[b*3+1]);return [new THREE.Vector2(0,v[a*3+2]/(.0124)),new THREE.Vector2(len/(office?.017:.022),v[b*3+2]/.0124),new THREE.Vector2(len/(office?.017:.022),v[c*3+2]/.0124),new THREE.Vector2(0,v[d*3+2]/.0124)];}
  }});
  geometry.rotateX(-Math.PI/2);geometry.translate(0,.027,0);
- const facade=facadeMats[office?(index%3?2:3):apartment?index%2:[0,1,4,5][index%4]],roof=roofMats[index%roofMats.length];
+ const facade=f.id===1493983001?facadeMats[0]:facadeMats[office?(index%3?2:3):apartment?index%2:[0,1,4,5][index%4]],roof=roofMats[index%roofMats.length];
  for(const group of geometry.groups)batch(sliceGeometry(geometry,group.start,group.count),group.materialIndex===0?roof:facade);geometry.dispose();
  buildingPolygons.push({points:p,box});
  if(height>20&&size.x>.045&&size.y>.045){
@@ -96,9 +99,55 @@ function placeStreetlights(){const positions=[];for(const road of roadPaths.filt
 }
 function atPath(path,d){d=((d%path.length)+path.length)%path.length;for(let i=1;i<path.distances.length;i++)if(path.distances[i]>=d){const a=path.points[i-1],b=path.points[i],t=(d-path.distances[i-1])/(path.distances[i]-path.distances[i-1]);return{point:a.clone().lerp(b,t),angle:Math.atan2(b.x-a.x,b.y-a.y)};}return{point:path.points[0],angle:0};}
 
+function makeSign(text,color='#28668b',width=.24,height=.035){
+ const canvas=document.createElement('canvas');canvas.width=768;canvas.height=128;const ctx=canvas.getContext('2d');ctx.fillStyle='#f4f5ee';ctx.fillRect(0,0,768,128);ctx.fillStyle=color;ctx.font='700 86px "Noto Sans KR", sans-serif';ctx.textAlign='center';ctx.textBaseline='middle';ctx.fillText(text,384,68);const texture=new THREE.CanvasTexture(canvas);texture.colorSpace=THREE.SRGBColorSpace;return new THREE.Mesh(new THREE.PlaneGeometry(width,height),new THREE.MeshBasicMaterial({map:texture,side:THREE.DoubleSide}));
+}
+function buildLandmarks(){
+ const campus=landmarks.hospital.campus.map(project),hospital=project(landmarks.hospital.coord);
+ plane(campus,m.asphalt,.011);
+ const parkingMat=mat(0xf0ede0),hospitalBuilding=features.find(f=>f.id===landmarks.hospital.buildingId);
+ // Existing surveyed building footprint is retained; this adds its forecourt and roof sign.
+ for(let row=0;row<2;row++)for(let col=0;col<12;col++){
+  const p=project([126.8714+col*.000105,37.47377-row*.00012]);
+  if(inside(p,campus)&&!inBuilding(p)){batch(stripGeometry([p,new THREE.Vector2(p.x,p.y+.019)],.001,.014),parkingMat);if(col%3!==0)batch(new THREE.BoxGeometry(.007,.006,.015).translate(p.x+.004,.018,p.y+.008),mat([0xebedeb,0x657c88,0xabb8b4][col%3]));}
+ }
+ if(hospitalBuilding){const box=new THREE.Box2().setFromPoints(hospitalBuilding.points),center=box.getCenter(new THREE.Vector2());
+  const sign=makeSign('광명성애병원','#286d98',.24,.034);sign.position.set(center.x,.027+.12+.022,box.max.y);detail.add(sign);
+  const northSign=sign.clone();northSign.position.z=box.min.y;northSign.rotation.y=Math.PI;detail.add(northSign);
+  const entrance=project([126.87194,37.47340]);batch(new THREE.BoxGeometry(.075,.004,.032).translate(entrance.x,.05,entrance.y-.02),m.concrete);
+  for(const dx of [-.032,.032])batch(new THREE.CylinderGeometry(.0012,.0012,.025,6).translate(entrance.x+dx,.036,entrance.y-.03),m.rail);
+ }
+ const station=project(landmarks.stations.find(s=>s.name==='철산').coord);
+ for(const exit of landmarks.exits){const p=project(exit.coord);batch(new THREE.BoxGeometry(.018,.005,.038).translate(p.x,.028,p.y),m.concrete);batch(new THREE.BoxGeometry(.02,.003,.032).translate(p.x,.045,p.y),mat(0x8ea6a5,{roughness:.35}));for(const dx of [-.008,.008])batch(new THREE.BoxGeometry(.0015,.018,.032).translate(p.x+dx,.035,p.y),m.rail);const sign=makeSign(`7  ${exit.number}`,'#7e8a33',.028,.012);sign.position.set(p.x,.054,p.y+.019);detail.add(sign);}
+ const trackMat=new THREE.MeshBasicMaterial({color:0x9dac50,transparent:true,opacity:.74,depthTest:false,depthWrite:false});
+ const tunnelMat=new THREE.MeshBasicMaterial({color:0x536136,transparent:true,opacity:.18,depthTest:false,depthWrite:false});
+ landmarks.tracks.forEach((track,index)=>{
+  const points=track.points.map(project);if(index===1)points.reverse();const path=getPath(points);
+  const tunnel=new THREE.Mesh(stripGeometry(points,.055,.018),tunnelMat);tunnel.renderOrder=40;subwayLayer.add(tunnel);
+  const rail=new THREE.Mesh(stripGeometry(points,.006,.022),trackMat);rail.renderOrder=41;subwayLayer.add(rail);
+  let distance=0,closest=Infinity,stationDistance=0;
+  for(let i=1;i<points.length;i++){const a=points[i-1],b=points[i],delta=b.clone().sub(a),length=delta.length(),t=clamp(station.clone().sub(a).dot(delta)/(length*length),0,1),dist=station.distanceTo(a.clone().lerp(b,t));if(dist<closest){closest=dist;stationDistance=distance+t*length;}distance+=length;}
+  const {point:p,angle}=atPath(path,stationDistance);const platform=new THREE.Mesh(new THREE.BoxGeometry(.024,.005,.68),new THREE.MeshBasicMaterial({color:0xd7dca6,transparent:true,opacity:.7,depthTest:false,depthWrite:false}));platform.position.set(p.x,.024,p.y);platform.rotation.y=angle;platform.renderOrder=42;subwayLayer.add(platform);
+  const body=new THREE.InstancedMesh(new THREE.BoxGeometry(.012,.012,.072),new THREE.MeshBasicMaterial({color:0xe8ece9,depthTest:false}),8);
+  const stripe=new THREE.InstancedMesh(new THREE.BoxGeometry(.0125,.0028,.07),new THREE.MeshBasicMaterial({color:0x7e8a33,depthTest:false}),8);
+  const windows=new THREE.InstancedMesh(new THREE.BoxGeometry(.010,.002,.046),new THREE.MeshBasicMaterial({color:0x344d59,depthTest:false}),8);
+  body.renderOrder=43;stripe.renderOrder=44;windows.renderOrder=45;subwayLayer.add(body,stripe,windows);subwayTrains.push({path,stationDistance,body,stripe,windows,index});
+ });
+ flush();
+}
+function animateSubway(t){
+ if(!subwayLayer.visible||mode!=='detail')return;
+ for(const train of subwayTrains){const speed=.05,approach=1.7,travel=approach/speed,phase=(t+travel-8+train.index*24)%(travel*2+20);let head;
+  if(phase<travel)head=train.stationDistance+.3-approach+phase*speed;else if(phase<travel+20)head=train.stationDistance+.3;else head=train.stationDistance+.3+(phase-travel-20)*speed;
+  for(let i=0;i<8;i++){const {point:p,angle}=atPath(train.path,head-i*.08);dummy.position.set(p.x,.042,p.y);dummy.rotation.set(0,angle,0);dummy.scale.set(1,1,1);dummy.updateMatrix();train.body.setMatrixAt(i,dummy.matrix);dummy.position.y=.041;dummy.updateMatrix();train.stripe.setMatrixAt(i,dummy.matrix);dummy.position.y=.049;dummy.updateMatrix();train.windows.setMatrixAt(i,dummy.matrix);}train.body.instanceMatrix.needsUpdate=true;train.stripe.instanceMatrix.needsUpdate=true;train.windows.instanceMatrix.needsUpdate=true;
+ }
+}
+function focusPlace(coord,kind){if(mode!=='detail')setMode('detail');stopTour();const p=project(coord),target=new THREE.Vector3(p.x,0,p.y);fly(target.clone().add(new THREE.Vector3(.8,2.9,3.2)),target,1300);document.body.classList.toggle('subway-focus',kind==='station');}
+
 async function buildDetail(){
  const response=await fetch('/data/corridor.json');if(!response.ok)throw new Error('Map data could not load');const data=await response.json();
  features=data.features.map(f=>({...f,points:f.points.map(project)}));
+ const landmarkResponse=await fetch('/data/landmarks.json');if(!landmarkResponse.ok)throw new Error('Landmarks unavailable');landmarks=await landmarkResponse.json();
  riverLine=features.find(f=>f.tags.waterway==='river'&&f.tags.name==='안양천').points;
  riverPolygons=features.filter(f=>f.tags.natural==='water').map(f=>f.points);
  const size=localBounds[1].clone().sub(localBounds[0]),center=localBounds[0].clone().lerp(localBounds[1],.5);
@@ -149,7 +198,7 @@ async function buildDetail(){
  // Riverside avenues follow mapped paths; planting avoids buildings and the channel.
  for(let z=localBounds[0].y+.04;z<localBounds[1].y;z+=.057){for(const side of [-1,1]){const p=new THREE.Vector2(riverX(z)+side*(.26+random()*.055),z);if(within(p)&&!inBuilding(p)&&!nearRoad(p)&&!riverPolygons.some(poly=>inside(p,poly)))trees.push(p);}}
  for(const r of roadPaths.filter(r=>r.width>=.03)){const path=getPath(r.points);for(let d=.03;d<path.length;d+=.13){const{point:p,angle}=atPath(path,d);p.x+=Math.cos(angle)*(r.width/2+.016);p.y-=Math.sin(angle)*(r.width/2+.016);if(within(p)&&!inBuilding(p)&&!riverPolygons.some(poly=>inside(p,poly)))trees.push(p);}}
- placeTrees(trees);placeStreetlights();flush();
+ placeTrees(trees);placeStreetlights();flush();buildLandmarks();
  traffic=traffic.slice(0,110);
  trafficBody=new THREE.InstancedMesh(new THREE.BoxGeometry(.007,.005,.017),mat(0xffffff,{roughness:.45}),traffic.length);
  trafficRoof=new THREE.InstancedMesh(new THREE.BoxGeometry(.0055,.0025,.008),mat(0x39545b,{roughness:.3}),traffic.length);
@@ -166,7 +215,11 @@ async function buildKorea(){
  const area=ring=>Math.abs(ring.reduce((sum,a,i)=>{const b=ring[(i+1)%ring.length];return sum+a[0]*b[1]-b[0]*a[1];},0));polys.sort((a,b)=>area(b[0])-area(a[0]));
  const sea=mesh(new THREE.PlaneGeometry(70,70).rotateX(-Math.PI/2).translate(0,-.05,0),seaMat,country,false);
  const green=mat(0x6d9263),edge=mat(0xa8bba0);
- for(const coords of polys){const ring=coords[0].map(kProject),shape=polygon(ring);mesh(new THREE.ExtrudeGeometry(shape,{depth:.12,bevelEnabled:false}).rotateX(-Math.PI/2).translate(0,-.035,0),edge,country);mesh(flatGeometry(ring,.089),green,country);}
+ const regionResponse=await fetch('/data/region.geojson');if(!regionResponse.ok)throw new Error('Regional coastline unavailable');const region=await regionResponse.json();
+ const contextLand=mat(0x99ae85);
+ for(const f of region.features)for(const coords of f.geometry.coordinates){if(coords[0].length<3)continue;const ring=coords[0].map(kProject);mesh(flatGeometry(ring,.089),contextLand,country,false);}
+ // A continuous peninsula and nearby coastlines give the national view geographic context.
+ for(const coords of polys){const ring=coords[0].map(kProject),shape=polygon(ring);mesh(new THREE.ExtrudeGeometry(shape,{depth:.012,bevelEnabled:false}).rotateX(-Math.PI/2).translate(0,.073,0),edge,country);mesh(flatGeometry(ring,.089),green,country);}
  // Smooth relief in the Taebaek / Sobaek spine, contained within the mainland.
  const mainland=polys[0][0].map(kProject),hillGeo=new THREE.PlaneGeometry(6.6,8.6,160,200).rotateX(-Math.PI/2),pa=hillGeo.getAttribute('position');
  const mountains=[[128.4,37.6,.34],[128.2,36.9,.28],[127.7,36.0,.22],[127.6,35.4,.28],[129.0,35.7,.18]];
@@ -178,6 +231,8 @@ async function buildKorea(){
 }
 
 const labelSpec=[
+ {name:'철산역 7호선',sub:'CHEOLSAN · 747',coord:[126.8675973,37.4760012],height:.12,kind:'station'},
+ {name:'광명성애병원',sub:'GWANGMYEONG SUNGAE',coord:[126.871875,37.4734763],height:.21,kind:'hospital'},
  {name:'철산동',sub:'CHEOLSAN',coord:[126.8688,37.4805],height:.17},
  {name:'가산디지털단지',sub:'GASAN DIGITAL',coord:[126.8806,37.4809],height:.4},
  {name:'안양천',sub:'ANYANGCHEON',coord:[126.8747,37.4794],height:.04,kind:'water'},
@@ -185,14 +240,14 @@ const labelSpec=[
  {name:'광명대교',sub:'GWANGMYEONG BRIDGE',coord:[126.8724,37.4851],height:.1,kind:'minor'},
  {name:'철산근린공원',sub:'CHEOLSAN PARK',coord:[126.8713,37.4721],height:.08,kind:'minor'}
 ];
-function setLabels(){const spec=mode==='detail'?labelSpec:[{name:'철산 · 안양천',sub:'CHEOLSAN',coord:[126.875,37.4805],height:.55},{name:'서울',sub:'SEOUL',coord:[127.14,37.75],height:.18,kind:'minor'},{name:'부산',sub:'BUSAN',coord:[129.07,35.18],height:.14},{name:'제주',sub:'JEJU',coord:[126.53,33.38],height:.13}];$('#labels').replaceChildren();labels=spec.map(s=>{const p=mode==='detail'?project(s.coord):kProject(s.coord);const el=document.createElement('div');el.className=`map-label ${s.kind||''}`;const body=document.createElement('div');body.className='label-body';body.textContent=s.name;const small=document.createElement('small');small.textContent=s.sub;body.append(small);el.append(body,document.createElement('i'));$('#labels').append(el);return{...s,pos:new THREE.Vector3(p.x,s.height,p.y),el};});}
-function homePosition(){return mode==='detail'?new THREE.Vector3(1.8,7.4,8.2):new THREE.Vector3(3.3,9.8,8.6);}
-function homeTarget(){return mode==='detail'?new THREE.Vector3(.1,0,.1):new THREE.Vector3(0,0,.1);}
+function setLabels(){const spec=mode==='detail'?labelSpec:[{name:'북한',sub:'KOREAN PENINSULA',coord:[127.2,39.25],height:.14,kind:'minor'},{name:'일본',sub:'JAPAN',coord:[131.5,33.4],height:.14,kind:'minor'},{name:'중국',sub:'CHINA',coord:[122.6,39.0],height:.14,kind:'minor'},{name:'철산 · 안양천',sub:'CHEOLSAN',coord:[126.875,37.4805],height:.55},{name:'서울',sub:'SEOUL',coord:[127.14,37.75],height:.18,kind:'minor'},{name:'부산',sub:'BUSAN',coord:[129.07,35.18],height:.14},{name:'제주',sub:'JEJU',coord:[126.53,33.38],height:.13}];$('#labels').replaceChildren();labels=spec.map(s=>{const p=mode==='detail'?project(s.coord):kProject(s.coord);const el=document.createElement('div');el.className=`map-label ${s.kind||''}`;const body=document.createElement('div');body.className='label-body';body.textContent=s.name;if(s.kind==='station'||s.kind==='hospital'){body.tabIndex=0;body.setAttribute('role','button');body.setAttribute('aria-label',s.kind==='station'?'철산역 도착정보 열기':'광명성애병원 보기');const action=()=>s.kind==='station'?transitUI?.open():focusPlace(s.coord,'hospital');body.onclick=action;body.onkeydown=event=>{if(event.key==='Enter'||event.key===' '){event.preventDefault();action();}};}const small=document.createElement('small');small.textContent=s.sub;body.append(small);el.append(body,document.createElement('i'));$('#labels').append(el);return{...s,pos:new THREE.Vector3(p.x,s.height,p.y),el};});}
+function homePosition(){return mode==='detail'?new THREE.Vector3(1.8,7.4,8.2):new THREE.Vector3(1.6,13.8,10.8);}
+function homeTarget(){return mode==='detail'?new THREE.Vector3(.1,0,.1):new THREE.Vector3(0,0,-1.25);}
 function fly(position,target,duration=1300){animation={from:camera.position.clone(),to:position.clone(),fromTarget:controls.target.clone(),target:target.clone(),start:performance.now(),duration:reduced?1:duration};controls.enabled=false;}
 function stopTour(){autoTour=false;controls.autoRotate=false;$('#tour').setAttribute('aria-pressed','false');$('#tour').innerHTML='<span>▷</span> 천천히 둘러보기';}
-function setMode(next){if(next===mode)return;stopTour();mode=next;detail.visible=mode==='detail';country.visible=mode==='korea';
+function setMode(next){if(next===mode)return;stopTour();mode=next;document.body.classList.toggle('country-view',mode==='korea');document.body.classList.remove('subway-focus');transitUI?.close();detail.visible=mode==='detail';country.visible=mode==='korea';
  $('#enter-place').classList.toggle('active',mode==='detail');$('#back-korea').classList.toggle('active',mode==='korea');$('#enter-place').setAttribute('aria-pressed',String(mode==='detail'));$('#back-korea').setAttribute('aria-pressed',String(mode==='korea'));
- $('#eyebrow').textContent=mode==='detail'?'CHEOLSAN · GASAN':'SOUTH KOREA';$('#title').textContent=mode==='detail'?'안양천을 따라서.':'대한민국, 가까이.';$('#lede').innerHTML=mode==='detail'?'철산의 주거지와 가산의 빌딩 숲,<br>그 사이로 흐르는 일상의 풍경.':'바다를 지나, 우리 동네로.<br>안양천을 눌러 철산으로 돌아오세요.';$('#place-region').textContent=mode==='detail'?'광명시 철산동 ↔ 금천구 가산동':'한반도의 산과 바다';controls.minDistance=mode==='detail'?1.2:5;setLabels();fly(homePosition(),homeTarget());}
+ $('#eyebrow').textContent=mode==='detail'?'CHEOLSAN · GASAN':'SOUTH KOREA';$('#title').textContent=mode==='detail'?'안양천을 따라서.':'대한민국, 가까이.';$('#lede').innerHTML=mode==='detail'?'철산의 주거지와 가산의 빌딩 숲,<br>그 사이로 흐르는 일상의 풍경.':'북쪽으로 이어지는 산줄기와 세 면의 바다.<br>한반도에서 우리 동네를 찾아보세요.';$('#place-region').textContent=mode==='detail'?'광명시 철산동 ↔ 금천구 가산동':'한반도 · 서해 · 동해 · 남해';controls.minDistance=mode==='detail'?1.2:5;setLabels();fly(homePosition(),homeTarget());}
 function updateSun(){const now=new Date(),position=sunDirection(now),day=clamp((position.altitude+.10)/.55,0,1),above=Math.max(0,Math.sin(position.altitude));
  sun.position.copy(position.vector).multiplyScalar(20);sun.intensity=position.altitude>0?2.4+above:0;sun.color.setHex(position.altitude<.18?0xffcf98:0xfff2dc);skyLight.intensity=.20+day*1.85;bounce.intensity=.06+day*.43;scene.environmentIntensity=.09+day*.16;renderer.toneMappingExposure=1.12;
  const night=1-clamp((position.altitude+.12)/.15,0,1);facadeMats.forEach((material,i)=>material.emissiveIntensity=night*(i===2||i===3?.48:.7));nightLights.visible=night>.15;document.body.classList.toggle('night',night>.4);
@@ -217,7 +272,7 @@ function animate(time){requestAnimationFrame(animate);const dt=Math.min(.04,(tim
  if(animation){const t=clamp((time-animation.start)/animation.duration,0,1),e=t*t*(3-2*t);camera.position.lerpVectors(animation.from,animation.to,e);controls.target.lerpVectors(animation.fromTarget,animation.target,e);if(t>=1){animation=null;controls.enabled=true;}}
  controls.update(dt);
  if(mode==='detail'){controls.target.x=clamp(controls.target.x,localBounds[0].x+1,localBounds[1].x-1);controls.target.z=clamp(controls.target.z,localBounds[0].y+1,localBounds[1].y-1);}
- const t=reduced?0:time/1000;waterMaterials.forEach(m=>m.uniforms.uTime.value=t);
+ const t=reduced?0:time/1000;animateSubway(t);waterMaterials.forEach(m=>m.uniforms.uTime.value=t);
  if(mode==='detail'&&trafficBody){traffic.forEach((car,i)=>{const {point:p,angle}=atPath(car.path,car.offset+(car.reverse?-1:1)*t*car.speed),side=car.reverse?-1:1;p.x+=Math.cos(angle)*car.width*.22*side;p.y-=Math.sin(angle)*car.width*.22*side;dummy.position.set(p.x,roadHeight(p,car.road)+.004,p.y);dummy.rotation.set(0,angle,0);dummy.scale.set(1,1,1);dummy.updateMatrix();trafficBody.setMatrixAt(i,dummy.matrix);dummy.position.y+=.003;dummy.updateMatrix();trafficRoof.setMatrixAt(i,dummy.matrix);});trafficBody.instanceMatrix.needsUpdate=true;trafficRoof.instanceMatrix.needsUpdate=true;
  if(trainBody)for(let i=0;i<6;i++){const{point:p,angle}=atPath(trainPath,t*.065+i*.081);dummy.position.set(p.x,.039,p.y);dummy.rotation.set(0,angle,0);dummy.updateMatrix();trainBody.setMatrixAt(i,dummy.matrix);trainBody.instanceMatrix.needsUpdate=true;}}
  if(frame++%2===0){const occupied=[];for(const label of labels){projected.copy(label.pos).project(camera);const x=(projected.x*.5+.5)*innerWidth,y=(-projected.y*.5+.5)*innerHeight;const width=label.kind==='minor'?95:120;const blocked=occupied.some(b=>Math.abs(x-b.x)<(width+b.w)/2&&Math.abs(y-b.y)<55);const visible=projected.z<1&&x>35&&x<innerWidth-35&&y>165&&y<innerHeight-55&&!blocked&&!(x<(innerWidth<750?285:395)&&y>innerHeight-(innerWidth<750?290:360));label.el.hidden=!visible;if(visible){occupied.push({x,y,w:width});label.el.style.left=`${x}px`;label.el.style.top=`${y}px`;}}
@@ -231,6 +286,7 @@ try{
  const stats=await buildDetail();await buildKorea();updateSun();setInterval(updateSun,30000);setLabels();
  camera.position.copy(homePosition().multiplyScalar(1.1));controls.target.copy(homeTarget());controls.update();fly(homePosition(),homeTarget(),1900);
  renderer.compile(scene,camera);$('#loading').classList.add('hidden');$('#loading').setAttribute('aria-hidden','true');requestAnimationFrame(animate);
+ transitUI=setupTransit({focusStation:()=>focusPlace([126.8675973,37.4760012],'station'),focusHospital:()=>focusPlace(landmarks.hospital.coord,'hospital'),setTransitVisible:enabled=>{subwayLayer.visible=enabled;$('#subway-caption').hidden=!enabled;}});
  window.sogeum={showKorea:()=>setMode('korea'),showCheolsan:()=>setMode('detail'),getState:()=>({view:mode,koreaTime:$('#clock').textContent,...stats})};
  if(document.modelContext?.registerTool){
   const lifecycle=new AbortController();
