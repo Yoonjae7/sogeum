@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { SCALE, project, polygon, flatGeometry, stripGeometry, combine, inside, segmentDistance, sunDirection } from './geo.js';
 import { waterMaterial } from './water.js?v=9';
-import { setupTransit } from './transit.js?v=15';
+import { setupTransit } from './transit.js?v=16';
 import { setupExplore } from './explore.js?v=15';
 import { startBusFeed } from './live-buses.js?v=15';
 import { makeRoadRouter, samplePath } from './bus-motion.js';
@@ -39,7 +39,7 @@ let seed=9247;function random(){seed=(seed*16807)%2147483647;return(seed-1)/2147
 const dummy=new THREE.Object3D();
 let mode='detail',animation=null,autoTour=false,labels=[],riverLine=[],features=[],traffic=[],trafficBody,trafficRoof,trainBody,trainPath;
 const nightLights=new THREE.Group();detail.add(nightLights);
-const subwayLayer=new THREE.Group();detail.add(subwayLayer);subwayLayer.visible=false;
+const subwayLayer=new THREE.Group();detail.add(subwayLayer);subwayLayer.visible=true;
 let landmarks,neighborhood,busCatalog,subwayTrains=[],transitUI,exploreUI,stopsVisible=true;
 const liveBuses=new THREE.Group();detail.add(liveBuses);const busModels=new Map();let routeBusMotion;
 let riverPolygons=[],parkPolygons=[],buildingPolygons=[],roadPaths=[];
@@ -123,19 +123,20 @@ function buildLandmarks(){
  }
  const station=project(landmarks.stations.find(s=>s.name==='철산').coord);
  for(const exit of landmarks.exits){const p=project(exit.coord);batch(new THREE.BoxGeometry(.018,.005,.038).translate(p.x,.028,p.y),m.concrete);batch(new THREE.BoxGeometry(.02,.003,.032).translate(p.x,.045,p.y),mat(0x8ea6a5,{roughness:.35}));for(const dx of [-.008,.008])batch(new THREE.BoxGeometry(.0015,.018,.032).translate(p.x+dx,.035,p.y),m.rail);const sign=makeSign(`7  ${exit.number}`,'#7e8a33',.028,.012);sign.position.set(p.x,.054,p.y+.019);detail.add(sign);}
- const trackMat=new THREE.MeshBasicMaterial({color:0x9dac50,transparent:true,opacity:.74,depthTest:false,depthWrite:false});
- const tunnelMat=new THREE.MeshBasicMaterial({color:0x536136,transparent:true,opacity:.18,depthTest:false,depthWrite:false});
+ const trackMat=mat(0x87952f,{roughness:.48,metalness:.08});
+ const trackBedMat=mat(0x575e58,{roughness:.92});
+ const platformMat=mat(0xd7dca6,{roughness:.78});
  landmarks.tracks.forEach((track,index)=>{
   const points=track.points.map(project).filter(p=>within(p)&&p.x<riverX(p.y)+.3);if(points.length<2)return;if(index===1)points.reverse();const path=getPath(points);
-  const tunnel=new THREE.Mesh(stripGeometry(points,.085,.018),tunnelMat);tunnel.renderOrder=40;subwayLayer.add(tunnel);
-  const rail=new THREE.Mesh(stripGeometry(points,.01,.022),trackMat);rail.renderOrder=41;subwayLayer.add(rail);
+  const bed=mesh(stripGeometry(points,.082,.036),trackBedMat,subwayLayer);bed.receiveShadow=true;
+  const rail=mesh(stripGeometry(points,.018,.041),trackMat,subwayLayer);rail.receiveShadow=true;
   let distance=0,closest=Infinity,stationDistance=0;
   for(let i=1;i<points.length;i++){const a=points[i-1],b=points[i],delta=b.clone().sub(a),length=delta.length(),t=clamp(station.clone().sub(a).dot(delta)/(length*length),0,1),dist=station.distanceTo(a.clone().lerp(b,t));if(dist<closest){closest=dist;stationDistance=distance+t*length;}distance+=length;}
-  const {point:p,angle}=atPath(path,stationDistance);const platform=new THREE.Mesh(new THREE.BoxGeometry(.046,.008,.9),new THREE.MeshBasicMaterial({color:0xd7dca6,transparent:true,opacity:.7,depthTest:false,depthWrite:false}));platform.position.set(p.x,.024,p.y);platform.rotation.y=angle;platform.renderOrder=42;subwayLayer.add(platform);
-  const body=new THREE.InstancedMesh(new THREE.BoxGeometry(.023,.023,.098),new THREE.MeshBasicMaterial({color:0xe8ece9,depthTest:false}),8);
-  const stripe=new THREE.InstancedMesh(new THREE.BoxGeometry(.0235,.005,.096),new THREE.MeshBasicMaterial({color:0x7e8a33,depthTest:false}),8);
-  const windows=new THREE.InstancedMesh(new THREE.BoxGeometry(.02,.003,.068),new THREE.MeshBasicMaterial({color:0x344d59,depthTest:false}),8);
-  body.renderOrder=43;stripe.renderOrder=44;windows.renderOrder=45;subwayLayer.add(body,stripe,windows);subwayTrains.push({path,stationDistance,body,stripe,windows,index});
+  const {point:p,angle}=atPath(path,stationDistance);const platform=mesh(new THREE.BoxGeometry(.065,.012,.9),platformMat,subwayLayer);platform.position.set(p.x,.047,p.y);platform.rotation.y=angle;
+  const body=new THREE.InstancedMesh(new THREE.BoxGeometry(.031,.03,.104),mat(0xf1f3ef,{roughness:.42,metalness:.08}),8);
+  const stripe=new THREE.InstancedMesh(new THREE.BoxGeometry(.0318,.006,.102),mat(0x7e8a33,{roughness:.5}),8);
+  const windows=new THREE.InstancedMesh(new THREE.BoxGeometry(.0322,.008,.074),mat(0x294652,{roughness:.16,metalness:.22}),8);
+  body.castShadow=body.receiveShadow=true;stripe.castShadow=true;windows.castShadow=true;subwayLayer.add(body,stripe,windows);subwayTrains.push({path,stationDistance,body,stripe,windows,index});
  });
  flush();
 }
@@ -143,7 +144,7 @@ function animateSubway(t){
  if(!subwayLayer.visible||mode!=='detail')return;
  for(const train of subwayTrains){const speed=.05,approach=1.7,travel=approach/speed,phase=(t+travel-8+train.index*24)%(travel*2+20);let head;
   if(phase<travel)head=train.stationDistance+.3-approach+phase*speed;else if(phase<travel+20)head=train.stationDistance+.3;else head=train.stationDistance+.3+(phase-travel-20)*speed;
-  for(let i=0;i<8;i++){const {point:p,angle}=atPath(train.path,head-i*.108);dummy.position.set(p.x,.042,p.y);dummy.rotation.set(0,angle,0);dummy.scale.set(1,1,1);dummy.updateMatrix();train.body.setMatrixAt(i,dummy.matrix);dummy.position.y=.041;dummy.updateMatrix();train.stripe.setMatrixAt(i,dummy.matrix);dummy.position.y=.055;dummy.updateMatrix();train.windows.setMatrixAt(i,dummy.matrix);}train.body.instanceMatrix.needsUpdate=true;train.stripe.instanceMatrix.needsUpdate=true;train.windows.instanceMatrix.needsUpdate=true;
+  for(let i=0;i<8;i++){const {point:p,angle}=atPath(train.path,head-i*.113);dummy.position.set(p.x,.064,p.y);dummy.rotation.set(0,angle,0);dummy.scale.set(1,1,1);dummy.updateMatrix();train.body.setMatrixAt(i,dummy.matrix);dummy.position.y=.063;dummy.updateMatrix();train.stripe.setMatrixAt(i,dummy.matrix);dummy.position.y=.073;dummy.updateMatrix();train.windows.setMatrixAt(i,dummy.matrix);if(i===0&&train.label)train.label.pos.set(p.x,.135,p.y);}train.body.instanceMatrix.needsUpdate=true;train.stripe.instanceMatrix.needsUpdate=true;train.windows.instanceMatrix.needsUpdate=true;
  }
 }
 function focusPlace(coord,kind){if(mode!=='detail')setMode('detail');stopTour();const p=project(coord),target=new THREE.Vector3(p.x,0,p.y);fly(target.clone().add(kind==='district'?new THREE.Vector3(0,9.8,3.5):new THREE.Vector3(0,3.8,1.8)),target,1100);document.body.classList.toggle('subway-focus',kind==='station');}
@@ -301,6 +302,10 @@ function setLabels(){
  const clickable=['station','hospital','church','complex','bus'].includes(s.kind),body=document.createElement(clickable?'button':'div');body.className='label-body';body.textContent=s.kind==='bus'?'▰':s.name;
  if(clickable){body.type='button';body.setAttribute('aria-label',s.name+(s.kind==='bus'?` 정류소 ${s.sub}`:''));body.title=s.name;body.onclick=()=>{if(s.kind==='station'){exploreUI?.close();transitUI?.open();}else if(s.kind==='bus')exploreUI?.openStop(s.stop);else if(s.kind==='church')exploreUI?.openPlace(neighborhood.church);else if(s.kind==='complex')exploreUI?.openPlace({...s,description:'하안동 · 실제 단지 배치'});else{exploreUI?.close();focusPlace(s.coord,s.kind);}};}
  const small=document.createElement('small');small.textContent=s.kind==='bus'?s.name:s.sub;body.append(small);el.append(body,document.createElement('i'));$('#labels').append(el);return{...s,pos:new THREE.Vector3(p.x,s.height,p.y),el};});
+ if(mode==='detail')for(const train of subwayTrains){
+  const el=document.createElement('div');el.className='map-label subway-vehicle';const body=document.createElement('button');body.type='button';body.className='label-body';body.textContent='7호선';body.title='7호선 열차 지상 시각화';body.onclick=()=>transitUI?.open();el.append(body,document.createElement('i'));$('#labels').append(el);
+  const {point:p}=atPath(train.path,train.stationDistance);train.label={name:'7호선',kind:'subway-vehicle',pos:new THREE.Vector3(p.x,.135,p.y),el};labels.unshift(train.label);
+ }
 }
 function homePosition(){return mode==='detail'?new THREE.Vector3(-1.7,7.5,4.5):new THREE.Vector3(1.6,13.8,10.8);}
 function homeTarget(){return mode==='detail'?new THREE.Vector3(-1.7,0,1.0):new THREE.Vector3(0,0,-1.25);}
@@ -340,11 +345,11 @@ function animate(time){requestAnimationFrame(animate);const dt=Math.min(.04,(tim
  if(frame++%2===0){const occupied=[],distance=camera.position.distanceTo(controls.target);
  for(const label of labels){
   projected.copy(label.pos).project(camera);const x=(projected.x*.5+.5)*innerWidth,y=(-projected.y*.5+.5)*innerHeight;
-  const isBus=label.kind==='bus',w=isBus?15:label.kind==='road'?80:label.kind==='minor'?100:145,h=isBus?15:label.kind==='road'?23:44;
+  const isBus=label.kind==='bus',isVehicle=label.kind==='vehicle'||label.kind==='subway-vehicle',w=isBus?15:isVehicle?58:label.kind==='road'?80:label.kind==='minor'?100:145,h=isBus?15:isVehicle?30:label.kind==='road'?23:44;
   const blocked=occupied.some(b=>Math.abs(x-b.x)<(w+b.w)/2+5&&Math.abs(y-b.y)<(h+b.h)/2+4);
   const panelOpen=!$('#explore-panel').hidden||!$('#arrival-panel').hidden;
   const uiBlocked=(innerWidth>750&&x<370&&y<210)||(innerWidth>750&&panelOpen&&x>innerWidth-370&&y>80)||(innerWidth<=750&&panelOpen&&y>innerHeight-320);
-  const visible=projected.z>-1&&projected.z<1&&x>20&&x<innerWidth-45&&y>(innerWidth<750?180:90)&&y<innerHeight-80&&(!blocked||label.kind==='vehicle')&&!uiBlocked&&(!isBus||(stopsVisible&&distance<15))&&(label.kind!=='road'||distance<14);
+  const visible=projected.z>-1&&projected.z<1&&x>20&&x<innerWidth-45&&y>(innerWidth<750?180:90)&&y<innerHeight-80&&(!blocked||isVehicle)&&!uiBlocked&&(!isBus||(stopsVisible&&distance<15))&&(label.kind!=='road'||distance<14);
   label.el.hidden=!visible;if(visible){occupied.push({x,y,w,h});label.el.style.left=`${x}px`;label.el.style.top=`${y}px`;}
  }
  $('#compass-needle').style.transform=`rotate(${-controls.getAzimuthalAngle()*180/Math.PI}deg)`;
@@ -357,7 +362,7 @@ try{
  const stats=await buildDetail();updateSun();setInterval(updateSun,30000);setLabels();
  camera.position.copy(homePosition().multiplyScalar(1.1));controls.target.copy(homeTarget());controls.update();fly(homePosition(),homeTarget(),1900);
  renderer.compile(scene,camera);$('#loading').classList.add('hidden');$('#loading').setAttribute('aria-hidden','true');requestAnimationFrame(animate);
- transitUI=setupTransit({focusStation:()=>{exploreUI?.close();focusPlace([126.8675973,37.4760012],'station');},focusHospital:()=>{exploreUI?.close();focusPlace(landmarks.hospital.coord,'hospital');},setTransitVisible:enabled=>{subwayLayer.visible=enabled;$('#subway-caption').hidden=!enabled;}});
+ transitUI=setupTransit({focusStation:()=>{exploreUI?.close();focusPlace([126.8675973,37.4760012],'station');},focusHospital:()=>{exploreUI?.close();focusPlace(landmarks.hospital.coord,'hospital');},setTransitVisible:()=>{subwayLayer.visible=true;$('#subway-caption').hidden=false;}});
  exploreUI=setupExplore({catalog:busCatalog,neighborhood,focus:focusPlace,toggleStops:value=>stopsVisible=value,closeTransit:()=>transitUI.close()});
  startBusFeed({update:updateBuses,focus:focusPlace});
  window.sogeum={showCheolsan:()=>setMode('detail'),getState:()=>({view:mode,koreaTime:$('#clock').textContent,...stats,buses:busModels.size,movingBuses:[...busModels.values()].filter(b=>b.path).length})};

@@ -4,7 +4,7 @@ export function setupTransit({focusStation,focusHospital,setTransitVisible}){
  const open=()=>{panel.hidden=false;focusStation();setTransitVisible(true);$('#subway-view').setAttribute('aria-pressed','true');refresh();clearInterval(timer);timer=setInterval(refresh,120000);};
  const close=()=>{panel.hidden=true;document.body.classList.remove('subway-focus');clearInterval(timer);timer=null;};
  $('#focus-station').onclick=open;$('#focus-hospital').onclick=()=>{close();focusHospital();};$('#close-arrivals').onclick=close;
- $('#subway-view').onclick=()=>{const enabled=$('#subway-view').getAttribute('aria-pressed')!=='true';$('#subway-view').setAttribute('aria-pressed',String(enabled));setTransitVisible(enabled);};
+ $('#subway-view').onclick=()=>{setTransitVisible(true);$('#subway-view').setAttribute('aria-pressed','true');focusStation();};
  $('#refresh-arrivals').onclick=refresh;$('#station-external').href=link;
  async function refresh(){
   if(document.hidden||panel.hidden||request)return;
