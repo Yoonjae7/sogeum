@@ -2,8 +2,10 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { SCALE, project, polygon, flatGeometry, stripGeometry, combine, inside, segmentDistance, sunDirection } from './geo.js';
 import { waterMaterial } from './water.js?v=9';
-import { setupTransit } from './transit.js?v=14';
-import { setupExplore } from './explore.js?v=14';
+import { setupTransit } from './transit.js?v=15';
+import { setupExplore } from './explore.js?v=15';
+import { startBusFeed } from './live-buses.js?v=15';
+import { makeRoadRouter, samplePath } from './bus-motion.js';
 
 const $=s=>document.querySelector(s), reduced=matchMedia('(prefers-reduced-motion: reduce)').matches;
 const clamp=THREE.MathUtils.clamp;
@@ -39,9 +41,9 @@ let mode='detail',animation=null,autoTour=false,labels=[],riverLine=[],features=
 const nightLights=new THREE.Group();detail.add(nightLights);
 const subwayLayer=new THREE.Group();detail.add(subwayLayer);subwayLayer.visible=false;
 let landmarks,neighborhood,busCatalog,subwayTrains=[],transitUI,exploreUI,stopsVisible=true;
-const liveBuses=new THREE.Group();detail.add(liveBuses);let busSnapshotAt=0;
+const liveBuses=new THREE.Group();detail.add(liveBuses);const busModels=new Map();let routeBusMotion;
 let riverPolygons=[],parkPolygons=[],buildingPolygons=[],roadPaths=[];
-const localBounds=[project([126.858,37.492]),project([126.895,37.455])];
+const localBounds=[project([126.858,37.492]),project([126.882,37.469])];
 const within=p=>p.x>localBounds[0].x&&p.x<localBounds[1].x&&p.y>localBounds[0].y&&p.y<localBounds[1].y;
 function riverX(z){for(let i=1;i<riverLine.length;i++){const a=riverLine[i-1],b=riverLine[i];if(z>=Math.min(a.y,b.y)&&z<=Math.max(a.y,b.y)){return a.x+(b.x-a.x)*(z-a.y)/(b.y-a.y);}}return riverLine.length?riverLine.reduce((a,b)=>Math.abs(b.y-z)<Math.abs(a.y-z)?b:a).x:0;}
 const riverDistance=p=>Math.abs(p.x-riverX(p.y));
@@ -124,7 +126,7 @@ function buildLandmarks(){
  const trackMat=new THREE.MeshBasicMaterial({color:0x9dac50,transparent:true,opacity:.74,depthTest:false,depthWrite:false});
  const tunnelMat=new THREE.MeshBasicMaterial({color:0x536136,transparent:true,opacity:.18,depthTest:false,depthWrite:false});
  landmarks.tracks.forEach((track,index)=>{
-  const points=track.points.map(project);if(index===1)points.reverse();const path=getPath(points);
+  const points=track.points.map(project).filter(p=>within(p)&&p.x<riverX(p.y)+.3);if(points.length<2)return;if(index===1)points.reverse();const path=getPath(points);
   const tunnel=new THREE.Mesh(stripGeometry(points,.085,.018),tunnelMat);tunnel.renderOrder=40;subwayLayer.add(tunnel);
   const rail=new THREE.Mesh(stripGeometry(points,.01,.022),trackMat);rail.renderOrder=41;subwayLayer.add(rail);
   let distance=0,closest=Infinity,stationDistance=0;
@@ -147,16 +149,15 @@ function animateSubway(t){
 function focusPlace(coord,kind){if(mode!=='detail')setMode('detail');stopTour();const p=project(coord),target=new THREE.Vector3(p.x,0,p.y);fly(target.clone().add(kind==='district'?new THREE.Vector3(0,9.8,3.5):new THREE.Vector3(0,3.8,1.8)),target,1100);document.body.classList.toggle('subway-focus',kind==='station');}
 
 async function buildDetail(){
- const response=await fetch('/data/corridor.json');if(!response.ok)throw new Error('Map data could not load');const data=await response.json();
+ const response=await fetch('/data/cheolsan-detail.json');if(!response.ok)throw new Error('Map data could not load');const data=await response.json();
  features=data.features.map(f=>({...f,points:f.points.map(project)}));
  const landmarkResponse=await fetch('/data/landmarks.json');if(!landmarkResponse.ok)throw new Error('Landmarks unavailable');landmarks=await landmarkResponse.json();
- const [nr,br]=await Promise.all([fetch('/data/neighborhood.json'),fetch('/data/bus-stops.json')]);if(!nr.ok||!br.ok)throw new Error('Neighborhood unavailable');[neighborhood,busCatalog]=await Promise.all([nr.json(),br.json()]);
+ const [nr,br]=await Promise.all([fetch('/data/neighborhood.json'),fetch('/data/cheolsan-buses.json')]);if(!nr.ok||!br.ok)throw new Error('Neighborhood unavailable');[neighborhood,busCatalog]=await Promise.all([nr.json(),br.json()]);neighborhood.complexes=[];
  riverLine=features.find(f=>f.tags.waterway==='river'&&f.tags.name==='안양천').points;
  riverPolygons=features.filter(f=>f.tags.natural==='water').map(f=>f.points);
  const size=localBounds[1].clone().sub(localBounds[0]),center=localBounds[0].clone().lerp(localBounds[1],.5);
  // The entire map surface sits above the base; roads, parks and water cannot be buried.
- mesh(new THREE.BoxGeometry(size.x,.1,size.y).translate(center.x,-.053,center.y),m.base);
- mesh(new THREE.PlaneGeometry(size.x,size.y).rotateX(-Math.PI/2).translate(center.x,0,center.y),m.ground,detail,false);
+ mesh(flatGeometry(data.metadata.boundary.map(project),0),m.ground,detail,false);
  for(const f of features){const t=f.tags;
   if(t.landuse&&!t.highway){const material=['grass','recreation_ground','forest'].includes(t.landuse)?m.grass:t.landuse==='residential'?mat(0xd3d9c9):t.landuse==='construction'?mat(0xc2bda7):m.curb;plane(f.points,material,.003);}
  }
@@ -201,7 +202,7 @@ async function buildDetail(){
  // Riverside avenues follow mapped paths; planting avoids buildings and the channel.
  for(let z=localBounds[0].y+.04;z<localBounds[1].y;z+=.057){for(const side of [-1,1]){const p=new THREE.Vector2(riverX(z)+side*(.26+random()*.055),z);if(within(p)&&!inBuilding(p)&&!nearRoad(p)&&!riverPolygons.some(poly=>inside(p,poly)))trees.push(p);}}
  for(const r of roadPaths.filter(r=>r.width>=.03)){const path=getPath(r.points);for(let d=.03;d<path.length;d+=.13){const{point:p,angle}=atPath(path,d);p.x+=Math.cos(angle)*(r.width/2+.016);p.y-=Math.sin(angle)*(r.width/2+.016);if(within(p)&&!inBuilding(p)&&!riverPolygons.some(poly=>inside(p,poly)))trees.push(p);}}
- placeTrees(trees);placeStreetlights();flush();buildLandmarks();buildNeighborhood();
+ placeTrees(trees);placeStreetlights();flush();buildLandmarks();buildNeighborhood();routeBusMotion=makeRoadRouter(roadPaths.map(r=>r.points.map(p=>[p.x,p.y])));
  traffic=traffic.slice(0,110);
  trafficBody=new THREE.InstancedMesh(new THREE.BoxGeometry(.007,.005,.017),mat(0xffffff,{roughness:.45}),traffic.length);
  trafficRoof=new THREE.InstancedMesh(new THREE.BoxGeometry(.0055,.0025,.008),mat(0x39545b,{roughness:.3}),traffic.length);
@@ -226,18 +227,33 @@ function buildNeighborhood(){
  flush();
 }
 const busBodyMat=mat(0x358969,{roughness:.5}),busGlassMat=mat(0x234956,{roughness:.25}),busRoofMat=mat(0xe9eee7);
+function removeBus(id){const bus=busModels.get(id);if(!bus)return;liveBuses.remove(bus.group);bus.group.traverse(child=>child.geometry?.dispose());bus.label.el.remove();labels=labels.filter(l=>l!==bus.label);busModels.delete(id);}
 function updateBuses(rows){
- for(const label of labels.filter(l=>l.kind==='vehicle'))label.el.remove();labels=labels.filter(l=>l.kind!=='vehicle');
-
- for(const obj of [...liveBuses.children]){liveBuses.remove(obj);obj.traverse(child=>{child.geometry?.dispose();if(child.userData.labelMaterial){child.material.map?.dispose();child.material.dispose();}});}
- liveBuses.visible=true;busSnapshotAt=Date.now();
- for(const row of rows){const p=project(row.coord),group=new THREE.Group();group.position.set(p.x,.042,p.y);
-  const from=busCatalog.stops.find(s=>s.id===row.fromStationId),to=busCatalog.stops.find(s=>s.id===row.toStationId);if(from&&to){const a=project(from.coord),b=project(to.coord);group.rotation.y=Math.atan2(b.x-a.x,b.y-a.y);}
-  mesh(new THREE.BoxGeometry(.021,.023,.081),busBodyMat,group);mesh(new THREE.BoxGeometry(.0215,.009,.067).translate(0,.005,0),busGlassMat,group);mesh(new THREE.BoxGeometry(.021,.003,.081).translate(0,.014,0),busRoofMat,group);
-  const sign=makeSign(row.name,'#1c664a',.075,.026);sign.position.y=.058;sign.userData.labelMaterial=true;group.add(sign);
-  liveBuses.add(group);
-  const el=document.createElement('div');el.className='map-label vehicle';const b=document.createElement('button');b.className='label-body';b.textContent=`▰ ${row.name}`;b.title=`${row.name}번 버스 · GBIS 수신 위치`;b.onclick=()=>focusPlace(row.coord,'bus');el.append(b,document.createElement('i'));$('#labels').append(el);labels.unshift({name:row.name,kind:'vehicle',pos:new THREE.Vector3(p.x,.11,p.y),el});
-
+ const ids=new Set(rows.map(row=>row.id));for(const id of busModels.keys())if(!ids.has(id))removeBus(id);
+ for(const row of rows){
+  const p=project(row.coord),target=[p.x,p.y];let bus=busModels.get(row.id);
+  if(!bus){
+   const group=new THREE.Group();group.position.set(p.x,.047,p.y);
+   mesh(new THREE.BoxGeometry(.026,.028,.092),busBodyMat,group);mesh(new THREE.BoxGeometry(.0265,.01,.078).translate(0,.006,0),busGlassMat,group);mesh(new THREE.BoxGeometry(.026,.004,.092).translate(0,.018,0),busRoofMat,group);
+   liveBuses.add(group);
+   const el=document.createElement('div');el.className='map-label vehicle';const b=document.createElement('button');b.className='label-body';b.textContent=`▰ ${row.name}`;b.title=`${row.name}번 · 실제 위치 사이 이동 보간`;el.append(b,document.createElement('i'));$('#labels').append(el);
+   const label={name:row.name,kind:'vehicle',pos:new THREE.Vector3(p.x,.11,p.y),el};labels.unshift(label);
+   bus={group,label,target,path:null,seen:row.receivedAt,row};b.onclick=()=>focusPlace(bus.row.coord,'bus');busModels.set(row.id,bus);
+  }else if(bus.seen!==row.receivedAt){
+   if(Math.hypot(target[0]-bus.target[0],target[1]-bus.target[1])>.0005){
+    const from=[bus.group.position.x,bus.group.position.z];bus.path=reduced?null:routeBusMotion(from,target);bus.start=performance.now();bus.duration=15000;
+    if(!bus.path)bus.group.position.set(p.x,.047,p.y);bus.target=target;
+   }
+   bus.seen=row.receivedAt;bus.row=row;
+  }
+  if(!bus.path){const from=busCatalog.stops.find(s=>s.id===row.fromStationId),to=busCatalog.stops.find(s=>s.id===row.toStationId);if(from&&to){const a=project(from.coord),b=project(to.coord);bus.group.rotation.y=Math.atan2(b.x-a.x,b.y-a.y);}}
+ }
+}
+function animateBuses(now){
+ for(const [id,bus]of busModels){
+  if(Date.now()-Date.parse(bus.seen)>90000){removeBus(id);continue;}
+  if(bus.path){const t=clamp((now-bus.start)/bus.duration,0,1),sample=samplePath(bus.path,t);bus.group.position.set(sample.point[0],.047,sample.point[1]);bus.group.rotation.y=sample.angle;if(t===1)bus.path=null;}
+  bus.label.pos.set(bus.group.position.x,.11,bus.group.position.z);
  }
 }
 
@@ -267,7 +283,6 @@ const labelSpec=[
  {name:'철산역 7호선',sub:'CHEOLSAN · 747',coord:[126.8675973,37.4760012],height:.12,kind:'station'},
  {name:'광명성애병원',sub:'GWANGMYEONG SUNGAE',coord:[126.871875,37.4734763],height:.21,kind:'hospital'},
  {name:'철산동',sub:'CHEOLSAN',coord:[126.8688,37.4805],height:.17},
- {name:'가산디지털단지',sub:'GASAN DIGITAL',coord:[126.8806,37.4809],height:.4},
  {name:'안양천',sub:'ANYANGCHEON',coord:[126.8747,37.4794],height:.04,kind:'water'},
  {name:'철산교',sub:'CHEOLSAN BRIDGE',coord:[126.8770,37.4749],height:.1,kind:'minor'},
  {name:'광명대교',sub:'GWANGMYEONG BRIDGE',coord:[126.8724,37.4851],height:.1,kind:'minor'},
@@ -287,13 +302,13 @@ function setLabels(){
  if(clickable){body.type='button';body.setAttribute('aria-label',s.name+(s.kind==='bus'?` 정류소 ${s.sub}`:''));body.title=s.name;body.onclick=()=>{if(s.kind==='station'){exploreUI?.close();transitUI?.open();}else if(s.kind==='bus')exploreUI?.openStop(s.stop);else if(s.kind==='church')exploreUI?.openPlace(neighborhood.church);else if(s.kind==='complex')exploreUI?.openPlace({...s,description:'하안동 · 실제 단지 배치'});else{exploreUI?.close();focusPlace(s.coord,s.kind);}};}
  const small=document.createElement('small');small.textContent=s.kind==='bus'?s.name:s.sub;body.append(small);el.append(body,document.createElement('i'));$('#labels').append(el);return{...s,pos:new THREE.Vector3(p.x,s.height,p.y),el};});
 }
-function homePosition(){return mode==='detail'?new THREE.Vector3(0,9.5,5.0):new THREE.Vector3(1.6,13.8,10.8);}
-function homeTarget(){return mode==='detail'?new THREE.Vector3(0,0,1.8):new THREE.Vector3(0,0,-1.25);}
+function homePosition(){return mode==='detail'?new THREE.Vector3(-1.7,7.5,4.5):new THREE.Vector3(1.6,13.8,10.8);}
+function homeTarget(){return mode==='detail'?new THREE.Vector3(-1.7,0,1.0):new THREE.Vector3(0,0,-1.25);}
 function fly(position,target,duration=1300){animation={from:camera.position.clone(),to:position.clone(),fromTarget:controls.target.clone(),target:target.clone(),start:performance.now(),duration:reduced?1:duration};controls.enabled=false;}
 function stopTour(){autoTour=false;controls.autoRotate=false;$('#tour').setAttribute('aria-pressed','false');$('#tour').innerHTML='<span>▷</span> 천천히 둘러보기';}
 function setMode(next){if(next===mode)return;stopTour();mode=next;document.body.classList.toggle('country-view',mode==='korea');document.body.classList.remove('subway-focus');transitUI?.close();exploreUI?.close();detail.visible=mode==='detail';country.visible=mode==='korea';
  $('#enter-place').classList.toggle('active',mode==='detail');$('#back-korea').classList.toggle('active',mode==='korea');$('#enter-place').setAttribute('aria-pressed',String(mode==='detail'));$('#back-korea').setAttribute('aria-pressed',String(mode==='korea'));
- $('#eyebrow').textContent=mode==='detail'?'CHEOLSAN · GASAN':'SOUTH KOREA';$('#title').textContent=mode==='detail'?'철산 · 하안 · 가산':'대한민국, 가까이.';$('#lede').innerHTML=mode==='detail'?'철산의 주거지와 가산의 빌딩 숲,<br>그 사이로 흐르는 일상의 풍경.':'북쪽으로 이어지는 산줄기와 세 면의 바다.<br>한반도에서 우리 동네를 찾아보세요.';$('#place-region').textContent=mode==='detail'?'광명시 철산동 ↔ 금천구 가산동':'한반도 · 서해 · 동해 · 남해';controls.minDistance=mode==='detail'?1.2:5;setLabels();fly(homePosition(),homeTarget());}
+ $('#eyebrow').textContent=mode==='detail'?'CHEOLSAN':'SOUTH KOREA';$('#title').textContent=mode==='detail'?'철산, 우리 동네':'대한민국, 가까이.';$('#lede').innerHTML=mode==='detail'?'철산역에서 광명성애병원까지,<br>버스가 지나는 우리 동네.':'북쪽으로 이어지는 산줄기와 세 면의 바다.<br>한반도에서 우리 동네를 찾아보세요.';$('#place-region').textContent=mode==='detail'?'광명시 철산동':'한반도 · 서해 · 동해 · 남해';controls.minDistance=mode==='detail'?1.2:5;setLabels();fly(homePosition(),homeTarget());}
 function updateSun(){const now=new Date(),position=sunDirection(now),day=clamp((position.altitude+.10)/.55,0,1),above=Math.max(0,Math.sin(position.altitude));
  sun.position.copy(position.vector).multiplyScalar(20);sun.intensity=position.altitude>0?2.4+above:0;sun.color.setHex(position.altitude<.18?0xffcf98:0xfff2dc);skyLight.intensity=1.15+day*1.05;bounce.intensity=.32+day*.17;scene.environmentIntensity=.25;renderer.toneMappingExposure=1.12;
  const night=1-clamp((position.altitude+.12)/.15,0,1);facadeMats.forEach((material,i)=>material.emissiveIntensity=night*(i===2||i===3?.18:.24));nightLights.visible=night>.15;document.body.classList.toggle('night',night>.4);
@@ -303,7 +318,7 @@ function updateSun(){const now=new Date(),position=sunDirection(now),day=clamp((
  $('#period').textContent=position.altitude<-.10?'고요한 밤':position.altitude<0?'해 질 무렵':position.altitude<.18?'따뜻한 낮은 햇살':'햇살이 머무는 오후';$('#sun-angle').textContent=`태양 고도 ${(position.altitude*180/Math.PI).toFixed(1)}°`;$('#sun-symbol').textContent=position.altitude<0?'☾':'☀';
  return position;
 }
-$('#enter-place').onclick=()=>setMode('detail');$('#back-korea').onclick=()=>setMode('korea');
+$('#enter-place').onclick=()=>setMode('detail');$('#back-korea').hidden=true;
 $('#reset').onclick=()=>{stopTour();fly(homePosition(),homeTarget(),850);};
 let overhead=false;$('#top-view').onclick=()=>{stopTour();overhead=!overhead;const d=Math.max(3,camera.position.distanceTo(controls.target));fly(controls.target.clone().add(overhead?new THREE.Vector3(0,d,.01):new THREE.Vector3(0,d*.85,d*.52)),controls.target,900);$('#top-view').textContent=overhead?'3D':'2D';};
 function zoom(factor){stopTour();const offset=camera.position.clone().sub(controls.target),length=clamp(offset.length()*factor,controls.minDistance,controls.maxDistance);fly(controls.target.clone().add(offset.setLength(length)),controls.target,420);}
@@ -318,7 +333,7 @@ function animate(time){requestAnimationFrame(animate);const dt=Math.min(.04,(tim
  if(animation){const t=clamp((time-animation.start)/animation.duration,0,1),e=t*t*(3-2*t);camera.position.lerpVectors(animation.from,animation.to,e);controls.target.lerpVectors(animation.fromTarget,animation.target,e);if(t>=1){animation=null;controls.enabled=true;}}
  controls.update(dt);
  if(mode==='detail'){controls.target.x=clamp(controls.target.x,localBounds[0].x+1,localBounds[1].x-1);controls.target.z=clamp(controls.target.z,localBounds[0].y+1,localBounds[1].y-1);}
- if(busSnapshotAt&&Date.now()-busSnapshotAt>90000){updateBuses([]);busSnapshotAt=0;}
+ animateBuses(time);
  const t=reduced?0:time/1000;animateSubway(t);waterMaterials.forEach(m=>m.uniforms.uTime.value=t);
  if(mode==='detail'&&trafficBody){traffic.forEach((car,i)=>{const {point:p,angle}=atPath(car.path,car.offset+(car.reverse?-1:1)*t*car.speed),side=car.reverse?-1:1;p.x+=Math.cos(angle)*car.width*.22*side;p.y-=Math.sin(angle)*car.width*.22*side;dummy.position.set(p.x,roadHeight(p,car.road)+.004,p.y);dummy.rotation.set(0,angle,0);dummy.scale.set(1,1,1);dummy.updateMatrix();trafficBody.setMatrixAt(i,dummy.matrix);dummy.position.y+=.003;dummy.updateMatrix();trafficRoof.setMatrixAt(i,dummy.matrix);});trafficBody.instanceMatrix.needsUpdate=true;trafficRoof.instanceMatrix.needsUpdate=true;
  if(trainBody)for(let i=0;i<6;i++){const{point:p,angle}=atPath(trainPath,t*.065+i*.108);dummy.position.set(p.x,.045,p.y);dummy.rotation.set(0,angle,0);dummy.updateMatrix();trainBody.setMatrixAt(i,dummy.matrix);trainBody.instanceMatrix.needsUpdate=true;}}
@@ -329,7 +344,7 @@ function animate(time){requestAnimationFrame(animate);const dt=Math.min(.04,(tim
   const blocked=occupied.some(b=>Math.abs(x-b.x)<(w+b.w)/2+5&&Math.abs(y-b.y)<(h+b.h)/2+4);
   const panelOpen=!$('#explore-panel').hidden||!$('#arrival-panel').hidden;
   const uiBlocked=(innerWidth>750&&x<370&&y<210)||(innerWidth>750&&panelOpen&&x>innerWidth-370&&y>80)||(innerWidth<=750&&panelOpen&&y>innerHeight-320);
-  const visible=projected.z>-1&&projected.z<1&&x>20&&x<innerWidth-45&&y>(innerWidth<750?180:90)&&y<innerHeight-80&&!blocked&&!uiBlocked&&(!isBus||(stopsVisible&&distance<15))&&(label.kind!=='road'||distance<14);
+  const visible=projected.z>-1&&projected.z<1&&x>20&&x<innerWidth-45&&y>(innerWidth<750?180:90)&&y<innerHeight-80&&(!blocked||label.kind==='vehicle')&&!uiBlocked&&(!isBus||(stopsVisible&&distance<15))&&(label.kind!=='road'||distance<14);
   label.el.hidden=!visible;if(visible){occupied.push({x,y,w,h});label.el.style.left=`${x}px`;label.el.style.top=`${y}px`;}
  }
  $('#compass-needle').style.transform=`rotate(${-controls.getAzimuthalAngle()*180/Math.PI}deg)`;
@@ -339,15 +354,16 @@ function animate(time){requestAnimationFrame(animate);const dt=Math.min(.04,(tim
  renderer.render(scene,camera);
 }
 try{
- const stats=await buildDetail();await buildKorea();updateSun();setInterval(updateSun,30000);setLabels();
+ const stats=await buildDetail();updateSun();setInterval(updateSun,30000);setLabels();
  camera.position.copy(homePosition().multiplyScalar(1.1));controls.target.copy(homeTarget());controls.update();fly(homePosition(),homeTarget(),1900);
  renderer.compile(scene,camera);$('#loading').classList.add('hidden');$('#loading').setAttribute('aria-hidden','true');requestAnimationFrame(animate);
  transitUI=setupTransit({focusStation:()=>{exploreUI?.close();focusPlace([126.8675973,37.4760012],'station');},focusHospital:()=>{exploreUI?.close();focusPlace(landmarks.hospital.coord,'hospital');},setTransitVisible:enabled=>{subwayLayer.visible=enabled;$('#subway-caption').hidden=!enabled;}});
- exploreUI=setupExplore({catalog:busCatalog,neighborhood,focus:focusPlace,showBuses:updateBuses,toggleStops:value=>stopsVisible=value,closeTransit:()=>transitUI.close()});
- window.sogeum={showKorea:()=>setMode('korea'),showCheolsan:()=>setMode('detail'),getState:()=>({view:mode,koreaTime:$('#clock').textContent,...stats})};
+ exploreUI=setupExplore({catalog:busCatalog,neighborhood,focus:focusPlace,toggleStops:value=>stopsVisible=value,closeTransit:()=>transitUI.close()});
+ startBusFeed({update:updateBuses,focus:focusPlace});
+ window.sogeum={showCheolsan:()=>setMode('detail'),getState:()=>({view:mode,koreaTime:$('#clock').textContent,...stats,buses:busModels.size,movingBuses:[...busModels.values()].filter(b=>b.path).length})};
  if(document.modelContext?.registerTool){
   const lifecycle=new AbortController();
-  for(const tool of [{name:'read_korea_map',title:'Read Korea map',description:'Read the current view and Korea time.',inputSchema:{type:'object',properties:{},additionalProperties:false},annotations:{readOnlyHint:true},execute:()=>window.sogeum.getState()},{name:'open_cheolsan_map',title:'Open Anyangcheon',description:'Show the Cheolsan–Anyangcheon–Gasan corridor.',inputSchema:{type:'object',properties:{},additionalProperties:false},annotations:{readOnlyHint:false},execute:()=>{setMode('detail');return window.sogeum.getState();}}]){
+  for(const tool of [{name:'read_korea_map',title:'Read Korea map',description:'Read the current view and Korea time.',inputSchema:{type:'object',properties:{},additionalProperties:false},annotations:{readOnlyHint:true},execute:()=>window.sogeum.getState()},{name:'open_cheolsan_map',title:'Open Anyangcheon',description:'Show the Cheolsan neighborhood and its buses.',inputSchema:{type:'object',properties:{},additionalProperties:false},annotations:{readOnlyHint:false},execute:()=>{setMode('detail');return window.sogeum.getState();}}]){
    try{Promise.resolve(document.modelContext.registerTool(tool,{signal:lifecycle.signal})).catch(()=>{});}catch{}
   }
   addEventListener('pagehide',()=>lifecycle.abort(),{once:true});

@@ -21,3 +21,11 @@ Sun position is calculated from the current UTC date and the neighborhood's lati
 Local preview including the Vercel-style APIs: `node scripts/preview.cjs` (127.0.0.1:4173).
 
 For readability, road widths are exaggerated (major roads 1.65×, local roads 1.35×, paths 1.12×). Bus and train models are enlarged. Geographic centerlines and reported vehicle coordinates remain unchanged; displayed widths/vehicle dimensions are not to scale.
+
+## Cheolsan-only automatic bus view
+
+The active renderer now loads `cheolsan-detail.json` (1,708 features, about 537 KB), rather than the 5,959-feature full corridor. `scripts/prepare-cheolsan.cjs` derives a west-bank neighborhood bounded at 37.469–37.492° N and following the mapped Anyangcheon centerline with an east-bank margin. Gasan buildings and southern Haan are excluded. The full corridor files remain as source archives; the national scene is no longer built at startup.
+
+`cheolsan-buses.json` contains 93 stops and 12 matched routes. All matched routes load automatically via `/api/buses?all=1`, refreshed every 15 seconds while the tab is visible. Closing an information panel no longer hides buses. Route-number labels stay attached to persistent vehicle models.
+
+Movement is an explicitly labeled interpolation between two received GPS samples, along the connected OSM road graph, over 15 seconds. It is delayed visualization, not a continuous GPS stream or a prediction of an unobserved position. Large jumps, points far from roads, and disconnected roads snap to the received coordinate instead of inventing a path. Identical samples keep a vehicle stopped. After 90 seconds without a fresh receipt, a marker is removed. Failed routes retain only their still-fresh previous samples; successful empty route responses clear those routes.
