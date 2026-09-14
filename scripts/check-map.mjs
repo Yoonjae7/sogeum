@@ -23,7 +23,7 @@ assert(sunDirection(new Date('2026-09-13T08:00:00Z')).vector.x<0);
 const data=JSON.parse(fs.readFileSync(new URL('../dist/data/corridor.json',import.meta.url)));
 assert(data.features.filter(f=>f.tags.building).length>2000);
 assert(data.features.some(f=>f.tags.name==='안양천'&&f.tags.natural==='water'));
-for(const f of data.features)for(const [lon,lat]of f.points){assert(Number.isFinite(lon)&&Number.isFinite(lat));assert(lon>=126.8579999&&lon<=126.8920001&&lat>=37.4689999&&lat<=37.4920001);}
+for(const f of data.features)for(const [lon,lat]of f.points){assert(Number.isFinite(lon)&&Number.isFinite(lat));assert(lon>=126.8579999&&lon<=126.8950001&&lat>=37.4549999&&lat<=37.4920001);}
 const korea=JSON.parse(fs.readFileSync(new URL('../dist/data/korea.geojson',import.meta.url)));
 assert(korea.geometry.coordinates.length>30);
 console.log('Passed: upward map surfaces, batched geometry, geographic axes and bounds, continuous river data, detailed coastline, solar day/night and sun direction.');

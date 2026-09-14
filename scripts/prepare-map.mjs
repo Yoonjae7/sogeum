@@ -3,7 +3,7 @@ import fs from 'node:fs';
 // Public OSM snapshots; all coordinates remain longitude/latitude in the asset.
 const input = JSON.parse(fs.readFileSync(process.argv[2]));
 const extra = JSON.parse(fs.readFileSync(process.argv[3]));
-const bounds = [126.858, 37.469, 126.892, 37.492];
+const bounds = [126.858, 37.455, 126.895, 37.492];
 function clipPolygon(points) {
   let out = points;
   for (const [axis, edge, greater] of [[0,bounds[0],true],[0,bounds[2],false],[1,bounds[1],true],[1,bounds[3],false]]) {

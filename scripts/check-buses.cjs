@@ -1,0 +1,10 @@
+const assert=require('node:assert/strict');
+const {normalizeBuses,normalizeStop,unproject}=require('../lib/buses.cjs');
+const data=require('../dist/data/bus-stops.json'),hood=require('../dist/data/neighborhood.json');
+assert.equal(hood.complexes.length,13);assert.equal(new Set(data.stops.map(s=>s.id)).size,data.stops.length);
+assert(data.stops.filter(s=>s.source==='GBIS').length>=160);assert(data.stops.some(s=>s.ref==='14147'&&s.name==='광명성애병원'));
+const p=unproject(14123480.228557,4505418.521311);assert(Math.abs(p[0]-126.873)<.001&&Math.abs(p[1]-37.474)<.001);
+const rows=normalizeBuses({success:true,result:{realTime:{list:[{vehId:'1',routeNm:'503',busXList:[14123480.228557,0,'bad'],busYList:[4505418.521311,0,0]}]}}},'100100078','2026-09-13T20:00:00Z');assert.equal(rows.length,1);assert.equal(rows[0].name,'503');
+assert.throws(()=>normalizeBuses({success:false},'1','now'));
+const stop=normalizeStop({success:true,result:{stationId:'1',busStationInfo:[],busArrivalInfo:[{routeId:'r',routeName:'503',predictTime1:'0',predictTime2:'-1'},{routeId:'r2',routeName:'3',predictTime1:'5',predictTime2:'12'}]}},'now');assert.deepEqual(stop.arrivals[0].minutes,[]);assert.deepEqual(stop.arrivals[1].minutes,[5,12]);
+console.log('Passed: 13 complexes, official stops, projection, bus bounds, invalid upstream data and no fabricated arrivals.');
